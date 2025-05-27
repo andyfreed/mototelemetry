@@ -2,6 +2,7 @@
 """
 Motorcycle Telemetry System
 Records IMU and GPS data during rides, auto-detects engine on/off
+Designed for Node-RED dashboard integration
 """
 
 import qwiic_icm20948
@@ -22,7 +23,6 @@ import requests
 import subprocess
 import logging
 from pathlib import Path
-from influxdb import InfluxDBClient
 
 # Configuration
 DATA_DIR = Path("/home/pi/motorcycle_data")
@@ -38,11 +38,6 @@ SAMPLE_RATE = 10           # Hz - samples per second
 POWER_CHECK_INTERVAL = 5   # Check power status every 5 seconds
 UPS_HAT_PRESENT = False    # Set to False if no UPS hat installed (TESTING MODE)
 
-# InfluxDB configuration for real-time data
-INFLUXDB_HOST = 'localhost'
-INFLUXDB_PORT = 8086
-INFLUXDB_DATABASE = 'motorcycle_telemetry'
-
 class MotorcycleTelemetry:
     def __init__(self):
         self.setup_logging()
@@ -52,9 +47,6 @@ class MotorcycleTelemetry:
         # Initialize sensors
         self.imu = None
         self.gps_session = None
-        
-        # Initialize InfluxDB client for real-time data
-        self.influx_client = None
         
         # State tracking
         self.engine_running = False
@@ -158,20 +150,6 @@ class MotorcycleTelemetry:
             # Continue without GPS - some rides might be indoors
             self.gps_socket = None
             self.data_stream = None
-            
-        # Initialize InfluxDB client
-        try:
-            self.influx_client = InfluxDBClient(
-                host=INFLUXDB_HOST, 
-                port=INFLUXDB_PORT, 
-                database=INFLUXDB_DATABASE
-            )
-            # Ensure database exists
-            self.influx_client.create_database(INFLUXDB_DATABASE)
-            self.logger.info("✅ InfluxDB connected for real-time data")
-        except Exception as e:
-            self.logger.warning(f"InfluxDB connection failed: {e} - continuing with SQLite only")
-            self.influx_client = None
             
         return True
         
@@ -369,102 +347,6 @@ class MotorcycleTelemetry:
         
         conn.commit()
         conn.close()
-        
-        # Also save to InfluxDB for real-time dashboard updates
-        self.save_to_influxdb(imu_data, gps_data, timestamp)
-        
-    def save_to_influxdb(self, imu_data, gps_data, timestamp):
-        """Save telemetry data to InfluxDB for real-time visualization"""
-        if not self.influx_client or not self.ride_session_id:
-            return
-            
-        try:
-            points = []
-            
-            # GPS data point
-            if gps_data and gps_data.get('latitude') is not None and gps_data.get('gps_fix'):
-                gps_point = {
-                    "measurement": "gps",
-                    "tags": {"session": self.ride_session_id},
-                    "time": timestamp,
-                    "fields": {
-                        "latitude": float(gps_data['latitude']),
-                        "longitude": float(gps_data['longitude'])
-                    }
-                }
-                if gps_data.get('speed_mph') is not None:
-                    gps_point["fields"]["speed_mph"] = float(gps_data['speed_mph'])
-                if gps_data.get('heading') is not None:
-                    gps_point["fields"]["heading"] = float(gps_data['heading'])
-                points.append(gps_point)
-            
-            # IMU data points
-            if imu_data:
-                # Accelerometer
-                if imu_data.get('ax') is not None:
-                    points.append({
-                        "measurement": "imu",
-                        "tags": {"session": self.ride_session_id, "sensor": "accelerometer"},
-                        "time": timestamp,
-                        "fields": {
-                            "x": float(imu_data['ax']),
-                            "y": float(imu_data['ay']),
-                            "z": float(imu_data['az'])
-                        }
-                    })
-                    
-                # Gyroscope
-                if imu_data.get('gx') is not None:
-                    points.append({
-                        "measurement": "imu",
-                        "tags": {"session": self.ride_session_id, "sensor": "gyroscope"},
-                        "time": timestamp,
-                        "fields": {
-                            "x": float(imu_data['gx']),
-                            "y": float(imu_data['gy']),
-                            "z": float(imu_data['gz'])
-                        }
-                    })
-                    
-                # Magnetometer
-                if imu_data.get('mx') is not None:
-                    points.append({
-                        "measurement": "imu",
-                        "tags": {"session": self.ride_session_id, "sensor": "magnetometer"},
-                        "time": timestamp,
-                        "fields": {
-                            "x": float(imu_data['mx']),
-                            "y": float(imu_data['my']),
-                            "z": float(imu_data['mz'])
-                        }
-                    })
-                    
-                # Temperature
-                if imu_data.get('temperature') is not None:
-                    points.append({
-                        "measurement": "temperature",
-                        "tags": {"session": self.ride_session_id},
-                        "time": timestamp,
-                        "fields": {"value": float(imu_data['temperature'])}
-                    })
-            
-            # Power data
-            points.append({
-                "measurement": "power",
-                "tags": {"session": self.ride_session_id},
-                "time": timestamp,
-                "fields": {
-                    "voltage": 0.0,  # placeholder
-                    "external_power": bool(self.external_power)
-                }
-            })
-            
-            # Write to InfluxDB
-            if points:
-                self.influx_client.write_points(points)
-                
-        except Exception as e:
-            self.logger.warning(f"Failed to write to InfluxDB: {e}")
         
     def upload_ride_data(self, session_id):
         """Upload ride data to server (when at home)"""
