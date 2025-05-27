@@ -1,0 +1,18 @@
+[Unit]
+Description=Node-RED graphical event wiring tool
+Wants=network.target
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi
+Environment="NODE_OPTIONS=--max_old_space_size=256"
+Environment="NODE_RED_OPTIONS=-v"
+ExecStart=/usr/bin/node-red
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target 
