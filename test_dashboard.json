@@ -1,0 +1,42 @@
+{
+  "dashboard": {
+    "title": "🔥 Real-Time Test",
+    "tags": ["test"],
+    "refresh": "1s",
+    "time": {
+      "from": "now-2m",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Live Data Points (Last 30s)",
+        "type": "stat",
+        "gridPos": {"h": 6, "w": 8, "x": 0, "y": 0},
+        "targets": [
+          {
+            "refId": "A",
+            "query": "SELECT COUNT(x) FROM imu WHERE time > now() - 30s",
+            "rawQuery": true,
+            "datasource": {"type": "influxdb", "uid": "influxdb"}
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Acceleration X",
+        "type": "timeseries",
+        "gridPos": {"h": 6, "w": 16, "x": 8, "y": 0},
+        "targets": [
+          {
+            "refId": "A",
+            "query": "SELECT x FROM imu WHERE sensor = 'accelerometer' AND time > now() - 2m",
+            "rawQuery": true,
+            "datasource": {"type": "influxdb", "uid": "influxdb"}
+          }
+        ]
+      }
+    ]
+  },
+  "overwrite": true
+} 

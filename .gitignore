@@ -1,0 +1,81 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+telemetry-env/
+venv/
+env/
+ENV/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Log files
+*.log
+dashboard.log
+telemetry_output.log
+telemetry_test.log
+
+# CSV data files (keep structure but not actual data)
+*.csv
+!*_example.csv
+
+# Cache directories
+.cache/
+.npm/
+.cursor-server/
+.config/
+.local/
+
+# Node-RED user directory (contains sensitive data)
+.node-red/
+
+# SSH keys and sensitive files
+.ssh/
+.sudo_as_admin_successful
+.bash_history
+.python_history
+.lesshsQ
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+aux
+
+# Service files (may contain system-specific paths)
+*.service
+
+# JSON files that may contain sensitive data
+*_working.json
+*_simple.json
+*_final.json
+
+# Keep example configurations
+!*_example.json
+!*_template.json 

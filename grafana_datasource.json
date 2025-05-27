@@ -1,0 +1,13 @@
+{
+  "name": "InfluxDB-Motorcycle",
+  "type": "influxdb",
+  "url": "http://localhost:8086",
+  "access": "proxy",
+  "database": "motorcycle_telemetry",
+  "isDefault": true,
+  "jsonData": {
+    "httpMode": "GET",
+    "keepCookies": []
+  },
+  "secureJsonFields": {}
+} 
