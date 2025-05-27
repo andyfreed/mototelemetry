@@ -1,0 +1,23 @@
+[Unit]
+Description=Motorcycle Telemetry System
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi
+Environment=PATH=/home/pi/telemetry-env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/pi/telemetry-env/bin/python /home/pi/motorcycle_telemetry.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Graceful shutdown
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target 
