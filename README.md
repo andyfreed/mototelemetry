@@ -45,8 +45,8 @@ A real-time motorcycle telemetry data collection and visualization system using 
 
 ### 1. Clone Repository
 ```bash
-git clone https://github.com/yourusername/motorcycle-telemetry.git
-cd motorcycle-telemetry
+git clone https://github.com/andyfreed/mototelemetry.git
+cd mototelemetry
 ```
 
 ### 2. Install Dependencies
@@ -93,7 +93,7 @@ python3 deploy_final_dashboard.py
 ## 📁 Project Structure
 
 ```
-motorcycle-telemetry/
+mototelemetry/
 ├── motorcycle_telemetry.py     # Main telemetry collection script
 ├── deploy_final_dashboard.py   # Dashboard deployment script
 ├── calibrated_dashboard.py     # Sensor calibration utilities
