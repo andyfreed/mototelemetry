@@ -1,204 +1,138 @@
 #!/usr/bin/env python3
 """
-Update Database Schema for Motorcycle Telemetry
-Adds route tracking tables if they don't exist
+Database Schema Update Script
+Fixes issues with the motorcycle telemetry database schema
 """
 
 import sqlite3
 import os
-import logging
 from pathlib import Path
+import logging
 
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+logger = logging.getLogger(__name__)
 
 # Database path
-DB_PATH = Path('/home/pi/motorcycle_data/telemetry.db')
+DB_PATH = Path("/home/pi/motorcycle_data/telemetry.db")
+BACKUP_PATH = Path("/home/pi/motorcycle_data/telemetry_backup.db")
+
+def backup_database():
+    """Create a backup of the database before making changes"""
+    if DB_PATH.exists():
+        import shutil
+        logger.info(f"Creating backup at {BACKUP_PATH}")
+        shutil.copy2(DB_PATH, BACKUP_PATH)
+        return True
+    return False
 
 def update_schema():
-    """Add necessary tables for route tracking if they don't exist"""
-    if not DB_PATH.exists():
-        logging.error(f"Database not found at {DB_PATH}")
-        return False
-        
+    """Update the database schema to fix issues"""
     try:
-        logging.info(f"Updating schema for database at {DB_PATH}")
-        
-        conn = sqlite3.connect(str(DB_PATH))
+        # Connect to the database
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Clean up any leftover temporary tables
-        cursor.execute("DROP TABLE IF EXISTS rides_old")
-        cursor.execute("DROP TABLE IF EXISTS rides_new")
+        # Start a transaction
+        conn.execute("BEGIN TRANSACTION")
         
-        # Get the exact schema of the rides table
-        cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='rides'")
-        rides_schema = cursor.fetchone()
-        if rides_schema:
-            logging.info(f"Current rides table schema: {rides_schema[0]}")
+        # Check if we need to update the rides table
+        cursor.execute("PRAGMA table_info(rides)")
+        columns = [column[1] for column in cursor.fetchall()]
         
-        # Check if tracks table exists
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tracks'")
-        tracks_exists = cursor.fetchone() is not None
-        
-        # Check if rides table exists
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='rides'")
-        rides_exists = cursor.fetchone() is not None
-        
-        # Check if status table exists
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='status'")
-        status_exists = cursor.fetchone() is not None
-        
-        # Create tracks table if it doesn't exist
-        if not tracks_exists:
-            logging.info("Creating tracks table")
-            cursor.execute('''
-            CREATE TABLE tracks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ride_id TEXT,
-                timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
-                latitude REAL,
-                longitude REAL,
-                altitude REAL,
-                speed_mph REAL
-            )
-            ''')
-        
-        # Fix or create rides table
-        if rides_exists:
-            # Get existing columns in rides table
-            cursor.execute("PRAGMA table_info(rides)")
-            columns_info = cursor.fetchall()
-            columns = [col[1] for col in columns_info]
+        if "session_id" not in columns and "ride_id" in columns:
+            logger.info("Updating rides table to include session_id")
             
-            logging.info(f"Existing columns in rides table: {columns}")
+            # Add session_id column if it doesn't exist
+            cursor.execute("ALTER TABLE rides ADD COLUMN session_id TEXT")
             
-            # Check if ride_id exists - if it does, we're already migrated
-            if 'ride_id' in columns:
-                logging.info("rides table already has ride_id column, skipping migration")
-                
-                # Just ensure all necessary columns exist
-                for column_name, column_type in [
-                    ('name', 'TEXT'), 
-                    ('distance_miles', 'REAL'), 
-                    ('max_speed_mph', 'REAL'), 
-                    ('avg_speed_mph', 'REAL'),
-                    ('active', 'INTEGER'),
-                    ('uploaded', 'INTEGER')
-                ]:
-                    if column_name not in columns:
-                        logging.info(f"Adding {column_name} column to rides table")
-                        cursor.execute(f"ALTER TABLE rides ADD COLUMN {column_name} {column_type}")
-                
-            # Check if we need to rename session_id to ride_id
-            elif 'session_id' in columns and 'ride_id' not in columns:
-                logging.info("Need to rename session_id to ride_id")
-                
-                # We need to create a new table with our desired schema
-                cursor.execute("ALTER TABLE rides RENAME TO rides_old")
-                
-                # Create the new table with correct schema
-                cursor.execute('''
-                CREATE TABLE rides (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ride_id TEXT UNIQUE,
-                    start_time TEXT,
-                    end_time TEXT,
-                    name TEXT DEFAULT NULL,
-                    distance_miles REAL DEFAULT NULL,
-                    max_speed_mph REAL DEFAULT NULL,
-                    avg_speed_mph REAL DEFAULT NULL,
-                    active INTEGER DEFAULT 1,
-                    uploaded INTEGER DEFAULT 0
-                )
-                ''')
-                
-                # Copy data from old table to new table
-                logging.info("Migrating data from old rides table to new schema")
-                cursor.execute('''
-                INSERT INTO rides (ride_id, start_time, end_time, active, uploaded) 
-                SELECT session_id, start_time, end_time, 
-                       COALESCE(active, 0), 
-                       COALESCE(uploaded, 0) 
-                FROM rides_old
-                ''')
-                
-                # Update names for existing rides
-                cursor.execute('''
-                UPDATE rides SET name = 'Ride on ' || datetime(start_time) 
-                WHERE name IS NULL AND start_time IS NOT NULL
-                ''')
-                
-                logging.info("Data migration complete")
-                
-                # Drop the old table
-                cursor.execute("DROP TABLE IF EXISTS rides_old")
-            else:
-                logging.warning("rides table exists but doesn't have session_id or ride_id, this is unexpected")
+            # Copy values from ride_id to session_id
+            cursor.execute("UPDATE rides SET session_id = ride_id")
+            
+            logger.info("Rides table updated with session_id")
         else:
-            # Create rides table with all necessary columns
-            logging.info("Creating rides table from scratch")
-            cursor.execute('''
-            CREATE TABLE rides (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ride_id TEXT UNIQUE,
-                start_time TEXT,
-                end_time TEXT,
-                name TEXT,
-                distance_miles REAL,
-                max_speed_mph REAL,
-                avg_speed_mph REAL,
-                active INTEGER DEFAULT 1,
-                uploaded INTEGER DEFAULT 0
-            )
-            ''')
+            logger.info("Rides table already has session_id or no ride_id column")
         
-        # Create status table if it doesn't exist
-        if not status_exists:
-            logging.info("Creating status table")
-            cursor.execute('''
-            CREATE TABLE status (
-                id INTEGER PRIMARY KEY,
-                current_ride_id TEXT,
-                tracking_active INTEGER DEFAULT 0,
-                last_updated TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-            ''')
-            
-            # Insert default status record
-            cursor.execute("INSERT INTO status (id, tracking_active) VALUES (1, 0)")
+        # Fix the foreign key reference in telemetry_data if needed
+        cursor.execute("PRAGMA foreign_key_list(telemetry_data)")
+        foreign_keys = cursor.fetchall()
         
-        # Check if we need to add any columns to the telemetry_data table
-        cursor.execute("PRAGMA table_info(telemetry_data)")
-        columns = [col[1] for col in cursor.fetchall()]
+        if foreign_keys:
+            for fk in foreign_keys:
+                if fk[2] == "rides_old":  # If referencing the old table name
+                    logger.info("Fixing foreign key reference in telemetry_data")
+                    
+                    # Create a temporary table with the correct foreign key
+                    cursor.execute("""
+                    CREATE TABLE telemetry_data_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id TEXT,
+                        timestamp TIMESTAMP,
+                        ax REAL, ay REAL, az REAL,
+                        gx REAL, gy REAL, gz REAL,
+                        mx REAL, my REAL, mz REAL,
+                        temperature REAL,
+                        vibration_level REAL, 
+                        power_voltage REAL, 
+                        on_external_power BOOLEAN, 
+                        latitude REAL, 
+                        longitude REAL, 
+                        speed_mph REAL, 
+                        heading REAL, 
+                        gps_fix BOOLEAN, 
+                        satellites_used INTEGER DEFAULT 0, 
+                        hdop REAL DEFAULT 99.0, 
+                        altitude REAL,
+                        FOREIGN KEY (session_id) REFERENCES rides (session_id)
+                    )
+                    """)
+                    
+                    # Copy all data
+                    cursor.execute("INSERT INTO telemetry_data_new SELECT * FROM telemetry_data")
+                    
+                    # Drop the old table and rename the new one
+                    cursor.execute("DROP TABLE telemetry_data")
+                    cursor.execute("ALTER TABLE telemetry_data_new RENAME TO telemetry_data")
+                    
+                    logger.info("Fixed foreign key reference in telemetry_data")
+                    break
         
-        if 'altitude' not in columns:
-            logging.info("Adding altitude column to telemetry_data")
-            cursor.execute("ALTER TABLE telemetry_data ADD COLUMN altitude REAL")
-        
-        if 'satellites_used' not in columns:
-            logging.info("Adding satellites_used column to telemetry_data")
-            cursor.execute("ALTER TABLE telemetry_data ADD COLUMN satellites_used INTEGER")
-        
+        # Commit the changes
         conn.commit()
-        conn.close()
+        logger.info("Database schema update completed successfully")
         
-        logging.info("Database schema update complete")
-        return True
-    except Exception as e:
-        logging.error(f"Error updating database schema: {e}")
-        if 'conn' in locals():
-            try:
-                conn.close()
-            except:
-                pass
+    except sqlite3.Error as e:
+        conn.rollback()
+        logger.error(f"Database error: {e}")
         return False
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error updating schema: {e}")
+        return False
+    finally:
+        conn.close()
+    
+    return True
 
 if __name__ == "__main__":
-    if update_schema():
-        print("✅ Database schema updated successfully")
+    logger.info("Starting database schema update")
+    
+    if not DB_PATH.exists():
+        logger.error(f"Database not found at {DB_PATH}")
+        exit(1)
+    
+    if backup_database():
+        logger.info("Database backup created successfully")
     else:
-        print("❌ Failed to update database schema") 
+        logger.warning("Could not create database backup")
+        
+    if update_schema():
+        logger.info("Schema update completed successfully")
+    else:
+        logger.error("Schema update failed")
+        exit(1)
+    
+    logger.info("Database schema update script completed") 
