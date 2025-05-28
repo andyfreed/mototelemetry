@@ -30,10 +30,38 @@ DB_PATH = DATA_DIR / 'telemetry.db'
 app = Flask(__name__)
 CORS(app)  # Enable cross-origin requests
 
+# Database connection parameters
+DB_TIMEOUT = 30.0  # Seconds to wait for database lock
+DB_RETRIES = 3     # Number of retries for database operations
+DB_RETRY_DELAY = 1 # Seconds between retries
+
+def get_db_connection():
+    """Get a database connection with timeout settings"""
+    return sqlite3.connect(str(DB_PATH), timeout=DB_TIMEOUT)
+
+def execute_with_retry(func, *args, **kwargs):
+    """Execute a database function with retry logic"""
+    last_error = None
+    for attempt in range(DB_RETRIES):
+        try:
+            return func(*args, **kwargs)
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e):
+                logging.warning(f"Database locked, retrying ({attempt+1}/{DB_RETRIES})...")
+                last_error = e
+                time.sleep(DB_RETRY_DELAY)
+            else:
+                # Re-raise if it's not a locking error
+                raise
+    
+    # If we got here, all retries failed
+    logging.error(f"All database retries failed: {last_error}")
+    raise last_error
+
 def setup_database():
     """Initialize or update database with needed tables for route tracking"""
     try:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         # Create tracks table for storing ride routes if it doesn't exist
@@ -83,6 +111,8 @@ def setup_database():
         return True
     except Exception as e:
         logging.error(f"Route tracker database setup failed: {e}")
+        if 'conn' in locals() and conn:
+            conn.close()
         return False
 
 def calculate_distance(points):
@@ -111,16 +141,10 @@ def calculate_distance(points):
         
     return distance
 
-@app.route('/api/start_ride', methods=['POST'])
-def start_ride():
-    """API endpoint to start a new ride tracking session"""
+def start_ride_db_operations(ride_id, ride_name):
+    """Database operations for starting a ride with retry logic"""
+    conn = get_db_connection()
     try:
-        ride_name = request.json.get('name', f"Ride on {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-        
-        # Generate a unique ride ID
-        ride_id = f"ride_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        conn = sqlite3.connect(str(DB_PATH))
         cursor = conn.cursor()
         
         # End any active rides first
@@ -139,7 +163,27 @@ def start_ride():
         )
         
         conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
         conn.close()
+
+@app.route('/api/start_ride', methods=['POST'])
+def start_ride():
+    """API endpoint to start a new ride tracking session"""
+    try:
+        ride_name = request.json.get('name', f"Ride on {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        
+        # Generate a unique ride ID
+        ride_id = f"ride_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        # Execute database operations with retry
+        def db_operations():
+            return start_ride_db_operations(ride_id, ride_name)
+            
+        execute_with_retry(db_operations)
         
         logging.info(f"Started new ride: {ride_id}")
         return jsonify({
@@ -154,24 +198,11 @@ def start_ride():
             'message': f"Failed to start ride: {str(e)}"
         }), 500
 
-@app.route('/api/end_ride', methods=['POST'])
-def end_ride():
-    """API endpoint to end the current ride tracking session"""
+def end_ride_db_operations(ride_id):
+    """Database operations for ending a ride with retry logic"""
+    conn = get_db_connection()
     try:
-        conn = sqlite3.connect(str(DB_PATH))
         cursor = conn.cursor()
-        
-        # Get the current active ride
-        cursor.execute("SELECT current_ride_id FROM status WHERE id=1")
-        result = cursor.fetchone()
-        
-        if not result or not result[0]:
-            return jsonify({
-                'success': False,
-                'message': "No active ride to end"
-            }), 400
-            
-        ride_id = result[0]
         
         # Calculate ride statistics
         cursor.execute(
@@ -227,7 +258,38 @@ def end_ride():
         )
         
         ride_info = cursor.fetchone()
+        return ride_info
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
         conn.close()
+
+@app.route('/api/end_ride', methods=['POST'])
+def end_ride():
+    """API endpoint to end the current ride tracking session"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Get the current active ride
+        cursor.execute("SELECT current_ride_id FROM status WHERE id=1")
+        result = cursor.fetchone()
+        conn.close()
+        
+        if not result or not result[0]:
+            return jsonify({
+                'success': False,
+                'message': "No active ride to end"
+            }), 400
+            
+        ride_id = result[0]
+        
+        # Execute database operations with retry
+        def db_operations():
+            return end_ride_db_operations(ride_id)
+            
+        ride_info = execute_with_retry(db_operations)
         
         if ride_info:
             logging.info(f"Ended ride: {ride_id}")
@@ -258,18 +320,22 @@ def end_ride():
 def tracking_status():
     """API endpoint to get current ride tracking status"""
     try:
-        conn = sqlite3.connect(str(DB_PATH))
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT s.tracking_active, s.current_ride_id, r.name, r.start_time
-            FROM status s
-            LEFT JOIN rides r ON s.current_ride_id = r.ride_id
-            WHERE s.id=1
-        """)
-        
-        result = cursor.fetchone()
-        conn.close()
+        def get_status():
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT s.tracking_active, s.current_ride_id, r.name, r.start_time
+                FROM status s
+                LEFT JOIN rides r ON s.current_ride_id = r.ride_id
+                WHERE s.id=1
+            """)
+            
+            result = cursor.fetchone()
+            conn.close()
+            return result
+            
+        result = execute_with_retry(get_status)
         
         if result:
             is_tracking = bool(result[0])
@@ -303,34 +369,42 @@ def tracking_status():
 def current_ride_track():
     """API endpoint to get track points for the current ride"""
     try:
-        conn = sqlite3.connect(str(DB_PATH))
-        cursor = conn.cursor()
+        def get_track_points():
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Get current ride ID
+            cursor.execute("SELECT current_ride_id FROM status WHERE id=1 AND tracking_active=1")
+            result = cursor.fetchone()
+            
+            if not result or not result[0]:
+                conn.close()
+                return None, None
+                
+            ride_id = result[0]
+            
+            # Get track points for this ride
+            cursor.execute(
+                """
+                SELECT latitude, longitude, altitude, speed_mph, timestamp
+                FROM tracks
+                WHERE ride_id=?
+                ORDER BY timestamp
+                """,
+                (ride_id,)
+            )
+            
+            points = cursor.fetchall()
+            conn.close()
+            return ride_id, points
+            
+        ride_id, points = execute_with_retry(get_track_points)
         
-        # Get current ride ID
-        cursor.execute("SELECT current_ride_id FROM status WHERE id=1 AND tracking_active=1")
-        result = cursor.fetchone()
-        
-        if not result or not result[0]:
+        if ride_id is None:
             return jsonify({
                 'success': False,
                 'message': "No active ride found"
             }), 404
-            
-        ride_id = result[0]
-        
-        # Get track points for this ride
-        cursor.execute(
-            """
-            SELECT latitude, longitude, altitude, speed_mph, timestamp
-            FROM tracks
-            WHERE ride_id=?
-            ORDER BY timestamp
-            """,
-            (ride_id,)
-        )
-        
-        points = cursor.fetchall()
-        conn.close()
         
         # Format points for GeoJSON LineString
         if points:
@@ -369,22 +443,26 @@ def current_ride_track():
 def get_rides():
     """API endpoint to get list of recorded rides"""
     try:
-        conn = sqlite3.connect(str(DB_PATH))
-        cursor = conn.cursor()
-        
-        cursor.execute(
-            """
-            SELECT 
-                ride_id, name, start_time, end_time, 
-                distance_miles, max_speed_mph, avg_speed_mph, active
-            FROM rides
-            ORDER BY start_time DESC
-            LIMIT 50
-            """
-        )
-        
-        rides = cursor.fetchall()
-        conn.close()
+        def get_ride_list():
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                """
+                SELECT 
+                    ride_id, name, start_time, end_time, 
+                    distance_miles, max_speed_mph, avg_speed_mph, active
+                FROM rides
+                ORDER BY start_time DESC
+                LIMIT 50
+                """
+            )
+            
+            rides = cursor.fetchall()
+            conn.close()
+            return rides
+            
+        rides = execute_with_retry(get_ride_list)
         
         ride_list = []
         for ride in rides:
@@ -415,33 +493,41 @@ def get_rides():
 def get_ride_track(ride_id):
     """API endpoint to get track points for a specific ride"""
     try:
-        conn = sqlite3.connect(str(DB_PATH))
-        cursor = conn.cursor()
+        def get_track_data():
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Verify ride exists
+            cursor.execute("SELECT name FROM rides WHERE ride_id=?", (ride_id,))
+            ride = cursor.fetchone()
+            
+            if not ride:
+                conn.close()
+                return None, None
+                
+            # Get track points for this ride
+            cursor.execute(
+                """
+                SELECT latitude, longitude, altitude, speed_mph, timestamp
+                FROM tracks
+                WHERE ride_id=?
+                ORDER BY timestamp
+                """,
+                (ride_id,)
+            )
+            
+            points = cursor.fetchall()
+            conn.close()
+            return ride, points
+            
+        ride, points = execute_with_retry(get_track_data)
         
-        # Verify ride exists
-        cursor.execute("SELECT name FROM rides WHERE ride_id=?", (ride_id,))
-        ride = cursor.fetchone()
-        
-        if not ride:
+        if ride is None:
             return jsonify({
                 'success': False,
                 'message': "Ride not found"
             }), 404
             
-        # Get track points for this ride
-        cursor.execute(
-            """
-            SELECT latitude, longitude, altitude, speed_mph, timestamp
-            FROM tracks
-            WHERE ride_id=?
-            ORDER BY timestamp
-            """,
-            (ride_id,)
-        )
-        
-        points = cursor.fetchall()
-        conn.close()
-        
         # Format points for GeoJSON LineString
         if points:
             track_points = []
@@ -481,33 +567,41 @@ def get_ride_track(ride_id):
 def get_ride_geojson(ride_id):
     """API endpoint to get track points as GeoJSON for a specific ride"""
     try:
-        conn = sqlite3.connect(str(DB_PATH))
-        cursor = conn.cursor()
+        def get_geojson_data():
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Verify ride exists
+            cursor.execute("SELECT name FROM rides WHERE ride_id=?", (ride_id,))
+            ride = cursor.fetchone()
+            
+            if not ride:
+                conn.close()
+                return None, None
+                
+            # Get track points for this ride
+            cursor.execute(
+                """
+                SELECT latitude, longitude, altitude, speed_mph, timestamp
+                FROM tracks
+                WHERE ride_id=?
+                ORDER BY timestamp
+                """,
+                (ride_id,)
+            )
+            
+            points = cursor.fetchall()
+            conn.close()
+            return ride, points
+            
+        ride, points = execute_with_retry(get_geojson_data)
         
-        # Verify ride exists
-        cursor.execute("SELECT name FROM rides WHERE ride_id=?", (ride_id,))
-        ride = cursor.fetchone()
-        
-        if not ride:
+        if ride is None:
             return jsonify({
                 'success': False,
                 'message': "Ride not found"
             }), 404
             
-        # Get track points for this ride
-        cursor.execute(
-            """
-            SELECT latitude, longitude, altitude, speed_mph, timestamp
-            FROM tracks
-            WHERE ride_id=?
-            ORDER BY timestamp
-            """,
-            (ride_id,)
-        )
-        
-        points = cursor.fetchall()
-        conn.close()
-        
         # Format as GeoJSON
         if not points:
             return jsonify({

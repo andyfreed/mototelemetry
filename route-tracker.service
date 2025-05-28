@@ -1,0 +1,14 @@
+[Unit]
+Description=Motorcycle Route Tracker Service
+After=network.target motorcycle-telemetry.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi
+ExecStart=/home/pi/telemetry-env/bin/python3 /home/pi/route_tracker.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target 

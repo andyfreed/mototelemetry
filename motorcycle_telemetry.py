@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
 """
-Motorcycle Telemetry System
-Records IMU and GPS data during rides, auto-detects engine on/off
-Designed for Node-RED dashboard integration
+Enhanced Motorcycle Telemetry System with Continuous GPS
+Records IMU and GPS data during rides with improved GPS performance
 """
 
 import qwiic_icm20948
-try:
-    import gps
-except ImportError:
-    # Try alternative GPS library
-    import gpsd as gps
+from gps3 import gps3
 import json
 import time
 import threading
@@ -23,20 +18,22 @@ import requests
 import subprocess
 import logging
 from pathlib import Path
+from collections import deque
 
 # Configuration
 DATA_DIR = Path("/home/pi/motorcycle_data")
 DB_PATH = DATA_DIR / "telemetry.db"
 LOG_PATH = DATA_DIR / "telemetry.log"
-HOME_WIFI_SSID = "Ncwf1"  # Your home WiFi network
-UPLOAD_URL = "http://your-server.com/api/telemetry"  # Configure your server
+HOME_WIFI_SSID = "Ncwf1"
+UPLOAD_URL = "http://your-server.com/api/telemetry"
 
 # Engine detection parameters
 SAMPLE_RATE = 10           # Hz - samples per second
+GPS_UPDATE_RATE = 1        # Hz - GPS updates per second
 
-# Power monitoring (for UPS hat with external power detection)
-POWER_CHECK_INTERVAL = 5   # Check power status every 5 seconds
-UPS_HAT_PRESENT = False    # Set to False if no UPS hat installed (TESTING MODE)
+# Power monitoring
+POWER_CHECK_INTERVAL = 5
+UPS_HAT_PRESENT = False
 
 class MotorcycleTelemetry:
     def __init__(self):
@@ -46,7 +43,8 @@ class MotorcycleTelemetry:
         
         # Initialize sensors
         self.imu = None
-        self.gps_session = None
+        self.gps_socket = None
+        self.data_stream = None
         
         # State tracking
         self.engine_running = False
@@ -57,10 +55,22 @@ class MotorcycleTelemetry:
         self.external_power = False
         self.last_power_check = 0
         
+        # GPS data cache with thread safety
+        self.gps_lock = threading.Lock()
+        self.latest_gps_data = None
+        self.gps_history = deque(maxlen=10)  # Keep last 10 GPS readings
+        self.gps_thread = None
+        self.gps_stats = {
+            'total_reads': 0,
+            'successful_reads': 0,
+            'last_fix_time': None,
+            'satellites_used': 0
+        }
+        
         # Threading
         self.data_lock = threading.Lock()
         
-        # Setup signal handlers for graceful shutdown
+        # Setup signal handlers
         signal.signal(signal.SIGINT, self.signal_handler)
         signal.signal(signal.SIGTERM, self.signal_handler)
         
@@ -114,9 +124,34 @@ class MotorcycleTelemetry:
                 speed_mph REAL,
                 heading REAL,
                 gps_fix BOOLEAN,
+                satellites_used INTEGER,
+                hdop REAL,
                 FOREIGN KEY (session_id) REFERENCES rides (session_id)
             )
         ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS tracks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ride_id TEXT,
+                timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                latitude REAL,
+                longitude REAL,
+                altitude REAL,
+                speed_mph REAL
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS status (
+                id INTEGER PRIMARY KEY,
+                current_ride_id TEXT,
+                tracking_active INTEGER DEFAULT 0,
+                last_updated TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        cursor.execute("INSERT OR IGNORE INTO status (id, tracking_active) VALUES (1, 0)")
         
         conn.commit()
         conn.close()
@@ -137,21 +172,74 @@ class MotorcycleTelemetry:
             self.logger.error(f"IMU initialization error: {e}")
             return False
             
-        # Initialize GPS
+        # Initialize GPS with continuous reading thread
         try:
-            from gps3 import gps3
             self.gps_socket = gps3.GPSDSocket()
             self.gps_socket.connect()
             self.gps_socket.watch()
             self.data_stream = gps3.DataStream()
-            self.logger.info("✅ GPS initialized successfully")
+            
+            # Start GPS reading thread
+            self.gps_thread = threading.Thread(target=self.gps_reader_thread, daemon=True)
+            self.gps_thread.start()
+            
+            self.logger.info("✅ GPS initialized with continuous reading")
         except Exception as e:
             self.logger.error(f"GPS initialization error: {e}")
-            # Continue without GPS - some rides might be indoors
             self.gps_socket = None
             self.data_stream = None
             
         return True
+    
+    def gps_reader_thread(self):
+        """Continuous GPS reading thread for better performance"""
+        self.logger.info("🛰️ GPS reader thread started")
+        
+        while self.running:
+            try:
+                new_data = self.gps_socket.next(timeout=0.5)
+                if new_data:
+                    self.data_stream.unpack(new_data)
+                    
+                    # Process TPV (Time-Position-Velocity) data
+                    if hasattr(self.data_stream, 'TPV'):
+                        tpv = self.data_stream.TPV
+                        if isinstance(tpv, dict) and 'lat' in tpv and 'lon' in tpv:
+                            if tpv['lat'] != 'n/a' and tpv['lon'] != 'n/a':
+                                # Valid GPS data
+                                gps_data = {
+                                    'latitude': float(tpv['lat']),
+                                    'longitude': float(tpv['lon']),
+                                    'speed_mph': float(tpv.get('speed', 0)) * 2.237 if tpv.get('speed', 'n/a') != 'n/a' else 0,
+                                    'heading': float(tpv.get('track', 0)) if tpv.get('track', 'n/a') != 'n/a' else None,
+                                    'gps_fix': tpv.get('mode', 0) >= 2,
+                                    'hdop': float(tpv.get('hdop', 99)) if tpv.get('hdop', 'n/a') != 'n/a' else 99,
+                                    'timestamp': datetime.now(timezone.utc)
+                                }
+                                
+                                # Update latest GPS data with thread safety
+                                with self.gps_lock:
+                                    self.latest_gps_data = gps_data
+                                    self.gps_history.append(gps_data)
+                                    self.gps_stats['successful_reads'] += 1
+                                    self.gps_stats['last_fix_time'] = datetime.now(timezone.utc)
+                    
+                    # Process SKY data for satellite info
+                    if hasattr(self.data_stream, 'SKY'):
+                        sky = self.data_stream.SKY
+                        if isinstance(sky, dict) and 'uSat' in sky:
+                            with self.gps_lock:
+                                self.gps_stats['satellites_used'] = int(sky.get('uSat', 0))
+                    
+                    with self.gps_lock:
+                        self.gps_stats['total_reads'] += 1
+                        
+            except Exception as e:
+                if self.running:  # Only log if we're still supposed to be running
+                    self.logger.warning(f"GPS reader thread error: {e}")
+                time.sleep(0.1)
+        
+        self.logger.info("🛑 GPS reader thread stopped")
         
     def get_current_wifi_ssid(self):
         """Get currently connected WiFi SSID"""
@@ -167,30 +255,22 @@ class MotorcycleTelemetry:
         return current_ssid == HOME_WIFI_SSID
         
     def check_external_power(self):
-        """Check if external power is connected (from bike's buck converter)"""
+        """Check if external power is connected"""
         if not UPS_HAT_PRESENT:
-            return True  # Assume always powered if no UPS hat
+            return True
             
         try:
-            # Check for common UPS hat power indicators
-            # This varies by UPS hat model - adjust for your specific hat
-            
-            # Method 1: Check if charging (indicates external power)
             if os.path.exists('/sys/class/power_supply/BAT/status'):
                 with open('/sys/class/power_supply/BAT/status', 'r') as f:
                     status = f.read().strip()
                     return status in ['Charging', 'Not charging', 'Full']
             
-            # Method 2: Check voltage levels (higher voltage = external power)
             if os.path.exists('/sys/class/power_supply/BAT/voltage_now'):
                 with open('/sys/class/power_supply/BAT/voltage_now', 'r') as f:
-                    voltage = int(f.read().strip()) / 1000000  # Convert to volts
-                    return voltage > 4.0  # External power typically shows higher voltage
+                    voltage = int(f.read().strip()) / 1000000
+                    return voltage > 4.0
                     
-            # Method 3: GPIO pin check (if UPS hat has power detection pin)
-            # You may need to configure this based on your specific UPS hat
-            
-            return False  # Default to battery power if unsure
+            return False
             
         except Exception as e:
             self.logger.warning(f"Could not check power status: {e}")
@@ -204,7 +284,6 @@ class MotorcycleTelemetry:
             self.external_power = self.check_external_power()
             self.last_power_check = current_time
             
-            # Log power state changes
             if old_status != self.external_power:
                 if self.external_power:
                     self.logger.info("🔌 External power connected (bike power)")
@@ -212,12 +291,8 @@ class MotorcycleTelemetry:
                     self.logger.info("🔋 Running on battery power (UPS)")
         
     def detect_engine_state(self, imu_data):
-        """Detect if engine is running based on external power only"""
-        # Update power status
+        """Detect if engine is running based on external power"""
         self.update_power_status()
-        
-        # Simple power-based engine detection
-        # Engine is running if external power is connected
         return self.external_power
         
     def read_imu_data(self):
@@ -226,7 +301,7 @@ class MotorcycleTelemetry:
             return None
             
         try:
-            self.imu.getAgmt()  # reads accel, gyro, mag, temp
+            self.imu.getAgmt()
             return {
                 'ax': self.imu.axRaw, 'ay': self.imu.ayRaw, 'az': self.imu.azRaw,
                 'gx': self.imu.gxRaw, 'gy': self.imu.gyRaw, 'gz': self.imu.gzRaw,
@@ -237,35 +312,23 @@ class MotorcycleTelemetry:
             self.logger.error(f"Error reading IMU: {e}")
             return None
             
-    def read_gps_data(self):
-        """Read data from GPS sensor"""
-        if not self.gps_socket or not self.data_stream:
+    def get_latest_gps_data(self):
+        """Get the latest GPS data from the continuous reader"""
+        with self.gps_lock:
+            if self.latest_gps_data:
+                # Return a copy to avoid thread safety issues
+                return self.latest_gps_data.copy()
             return None
-            
-        try:
-            new_data = self.gps_socket.next()
-            if new_data:
-                self.data_stream.unpack(new_data)
-                
-                # Check if we have valid GPS data
-                if hasattr(self.data_stream, 'TPV'):
-                    tpv = self.data_stream.TPV
-                    # TPV is a dictionary, not an object
-                    if 'lat' in tpv and 'lon' in tpv and tpv['lat'] != 'n/a' and tpv['lon'] != 'n/a':
-                        speed_ms = tpv.get('speed', None)
-                        speed_ms = speed_ms if speed_ms != 'n/a' else None
-                        return {
-                            'latitude': float(tpv['lat']) if tpv['lat'] != 'n/a' else None,
-                            'longitude': float(tpv['lon']) if tpv['lon'] != 'n/a' else None,
-                            'speed_mph': float(speed_ms) * 2.237 if speed_ms else None,  # Convert m/s to mph
-                            'heading': float(tpv.get('track', 0)) if tpv.get('track', 'n/a') != 'n/a' else None,
-                            'gps_fix': tpv.get('mode', 0) >= 2
-                        }
-        except Exception as e:
-            # GPS might not have fix yet
-            pass
-            
-        return None
+        
+    def get_gps_stats(self):
+        """Get GPS performance statistics"""
+        with self.gps_lock:
+            stats = self.gps_stats.copy()
+            if stats['total_reads'] > 0:
+                stats['success_rate'] = (stats['successful_reads'] / stats['total_reads']) * 100
+            else:
+                stats['success_rate'] = 0
+            return stats
         
     def start_ride_session(self):
         """Start a new ride session"""
@@ -280,7 +343,10 @@ class MotorcycleTelemetry:
         conn.commit()
         conn.close()
         
-        self.logger.info(f"🏍️  Started ride session: {self.ride_session_id}")
+        # Log GPS stats at ride start
+        stats = self.get_gps_stats()
+        self.logger.info(f"🏍️ Started ride session: {self.ride_session_id}")
+        self.logger.info(f"📡 GPS Stats: {stats['satellites_used']} satellites, {stats['success_rate']:.1f}% success rate")
         
     def end_ride_session(self):
         """End the current ride session"""
@@ -296,9 +362,11 @@ class MotorcycleTelemetry:
         conn.commit()
         conn.close()
         
+        # Log final GPS stats
+        stats = self.get_gps_stats()
         self.logger.info(f"🛑 Ended ride session: {self.ride_session_id}")
+        self.logger.info(f"📊 Final GPS Stats: {stats['successful_reads']} successful reads, {stats['success_rate']:.1f}% success rate")
         
-        # Try to upload data if at home
         if self.is_at_home():
             self.upload_ride_data(self.ride_session_id)
             
@@ -314,15 +382,15 @@ class MotorcycleTelemetry:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Note: Vibration data collection disabled per user request
-        # Still calculate internally for engine detection but don't store
+        # Get current satellite count
+        stats = self.get_gps_stats()
         
         cursor.execute('''
             INSERT INTO telemetry_data 
             (session_id, timestamp, ax, ay, az, gx, gy, gz, mx, my, mz, temperature,
              vibration_level, power_voltage, on_external_power, 
-             latitude, longitude, speed_mph, heading, gps_fix)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             latitude, longitude, speed_mph, heading, gps_fix, satellites_used, hdop)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             self.ride_session_id, timestamp,
             imu_data.get('ax') if imu_data else None,
@@ -335,26 +403,27 @@ class MotorcycleTelemetry:
             imu_data.get('my') if imu_data else None,
             imu_data.get('mz') if imu_data else None,
             imu_data.get('temperature') if imu_data else None,
-            None,  # vibration_level - disabled per user request
-            0,  # power_voltage (placeholder)
+            None,  # vibration_level
+            0,  # power_voltage
             self.external_power,
             gps_data.get('latitude') if gps_data else None,
             gps_data.get('longitude') if gps_data else None,
             gps_data.get('speed_mph') if gps_data else None,
             gps_data.get('heading') if gps_data else None,
             gps_data.get('gps_fix', False) if gps_data else False,
+            stats['satellites_used'],
+            gps_data.get('hdop', 99) if gps_data else 99,
         ))
         
         conn.commit()
         conn.close()
         
     def upload_ride_data(self, session_id):
-        """Upload ride data to server (when at home)"""
+        """Upload ride data to server"""
         try:
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             
-            # Get ride data
             cursor.execute(
                 'SELECT * FROM telemetry_data WHERE session_id = ?',
                 (session_id,)
@@ -364,14 +433,9 @@ class MotorcycleTelemetry:
             if not data:
                 return
                 
-            # Convert to JSON format
             columns = [desc[0] for desc in cursor.description]
             ride_data = [dict(zip(columns, row)) for row in data]
             
-            # Upload to server (implement your upload logic here)
-            # response = requests.post(UPLOAD_URL, json={'ride_data': ride_data})
-            
-            # Mark as uploaded
             cursor.execute(
                 'UPDATE rides SET uploaded = TRUE WHERE session_id = ?',
                 (session_id,)
@@ -390,25 +454,33 @@ class MotorcycleTelemetry:
             self.logger.error("Failed to initialize sensors")
             return
             
-        self.logger.info("🏍️  Motorcycle telemetry system started")
+        self.logger.info("🏍️ Enhanced Motorcycle telemetry system started")
+        self.logger.info("🛰️ GPS running in continuous mode for better performance")
+        
+        # Wait for initial GPS fix
+        self.logger.info("⏳ Waiting for GPS fix...")
+        for i in range(30):  # Wait up to 30 seconds
+            if self.get_latest_gps_data():
+                stats = self.get_gps_stats()
+                self.logger.info(f"✅ GPS ready! {stats['satellites_used']} satellites")
+                break
+            time.sleep(1)
         
         while self.running:
             try:
                 # Read sensor data
                 imu_data = self.read_imu_data()
-                gps_data = self.read_gps_data()
+                gps_data = self.get_latest_gps_data()  # Get from continuous reader
                 
                 # Detect engine state
                 engine_currently_running = self.detect_engine_state(imu_data)
                 
                 # Handle engine state changes
                 if engine_currently_running and not self.engine_running:
-                    # Engine just started
                     self.engine_running = True
                     self.start_ride_session()
                     
                 elif not engine_currently_running and self.engine_running:
-                    # Engine just stopped
                     self.engine_running = False
                     self.end_ride_session()
                     
@@ -434,9 +506,12 @@ class MotorcycleTelemetry:
         
     def cleanup(self):
         """Cleanup resources"""
+        self.running = False
+        if self.gps_thread:
+            self.gps_thread.join(timeout=2)
         if self.engine_running:
             self.end_ride_session()
-        self.logger.info("🛑 Motorcycle telemetry system stopped")
+        self.logger.info("🛑 Enhanced Motorcycle telemetry system stopped")
 
 if __name__ == "__main__":
     telemetry = MotorcycleTelemetry()

@@ -30,6 +30,16 @@ def update_schema():
         conn = sqlite3.connect(str(DB_PATH))
         cursor = conn.cursor()
         
+        # Clean up any leftover temporary tables
+        cursor.execute("DROP TABLE IF EXISTS rides_old")
+        cursor.execute("DROP TABLE IF EXISTS rides_new")
+        
+        # Get the exact schema of the rides table
+        cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='rides'")
+        rides_schema = cursor.fetchone()
+        if rides_schema:
+            logging.info(f"Current rides table schema: {rides_schema[0]}")
+        
         # Check if tracks table exists
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tracks'")
         tracks_exists = cursor.fetchone() is not None
@@ -57,9 +67,80 @@ def update_schema():
             )
             ''')
         
-        # Create rides table if it doesn't exist
-        if not rides_exists:
-            logging.info("Creating rides table")
+        # Fix or create rides table
+        if rides_exists:
+            # Get existing columns in rides table
+            cursor.execute("PRAGMA table_info(rides)")
+            columns_info = cursor.fetchall()
+            columns = [col[1] for col in columns_info]
+            
+            logging.info(f"Existing columns in rides table: {columns}")
+            
+            # Check if ride_id exists - if it does, we're already migrated
+            if 'ride_id' in columns:
+                logging.info("rides table already has ride_id column, skipping migration")
+                
+                # Just ensure all necessary columns exist
+                for column_name, column_type in [
+                    ('name', 'TEXT'), 
+                    ('distance_miles', 'REAL'), 
+                    ('max_speed_mph', 'REAL'), 
+                    ('avg_speed_mph', 'REAL'),
+                    ('active', 'INTEGER'),
+                    ('uploaded', 'INTEGER')
+                ]:
+                    if column_name not in columns:
+                        logging.info(f"Adding {column_name} column to rides table")
+                        cursor.execute(f"ALTER TABLE rides ADD COLUMN {column_name} {column_type}")
+                
+            # Check if we need to rename session_id to ride_id
+            elif 'session_id' in columns and 'ride_id' not in columns:
+                logging.info("Need to rename session_id to ride_id")
+                
+                # We need to create a new table with our desired schema
+                cursor.execute("ALTER TABLE rides RENAME TO rides_old")
+                
+                # Create the new table with correct schema
+                cursor.execute('''
+                CREATE TABLE rides (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ride_id TEXT UNIQUE,
+                    start_time TEXT,
+                    end_time TEXT,
+                    name TEXT DEFAULT NULL,
+                    distance_miles REAL DEFAULT NULL,
+                    max_speed_mph REAL DEFAULT NULL,
+                    avg_speed_mph REAL DEFAULT NULL,
+                    active INTEGER DEFAULT 1,
+                    uploaded INTEGER DEFAULT 0
+                )
+                ''')
+                
+                # Copy data from old table to new table
+                logging.info("Migrating data from old rides table to new schema")
+                cursor.execute('''
+                INSERT INTO rides (ride_id, start_time, end_time, active, uploaded) 
+                SELECT session_id, start_time, end_time, 
+                       COALESCE(active, 0), 
+                       COALESCE(uploaded, 0) 
+                FROM rides_old
+                ''')
+                
+                # Update names for existing rides
+                cursor.execute('''
+                UPDATE rides SET name = 'Ride on ' || datetime(start_time) 
+                WHERE name IS NULL AND start_time IS NOT NULL
+                ''')
+                
+                logging.info("Data migration complete")
+                
+                # Drop the old table
+                cursor.execute("DROP TABLE IF EXISTS rides_old")
+            else:
+                logging.warning("rides table exists but doesn't have session_id or ride_id, this is unexpected")
+        else:
+            # Create rides table with all necessary columns
+            logging.info("Creating rides table from scratch")
             cursor.execute('''
             CREATE TABLE rides (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,7 +151,8 @@ def update_schema():
                 distance_miles REAL,
                 max_speed_mph REAL,
                 avg_speed_mph REAL,
-                active INTEGER DEFAULT 1
+                active INTEGER DEFAULT 1,
+                uploaded INTEGER DEFAULT 0
             )
             ''')
         
@@ -108,6 +190,11 @@ def update_schema():
         return True
     except Exception as e:
         logging.error(f"Error updating database schema: {e}")
+        if 'conn' in locals():
+            try:
+                conn.close()
+            except:
+                pass
         return False
 
 if __name__ == "__main__":

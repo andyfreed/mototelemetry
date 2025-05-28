@@ -8,11 +8,11 @@ Type=simple
 User=pi
 Group=pi
 WorkingDirectory=/home/pi
-Environment="NODE_OPTIONS=--max_old_space_size=256"
+Environment="NODE_OPTIONS=--max_old_space_size=512"
 Environment="NODE_RED_OPTIONS=-v"
-ExecStart=/usr/bin/node-red
+ExecStart=/usr/local/bin/node-red
 Restart=always
 RestartSec=10
 
 [Install]
-WantedBy=multi-user.target 
+WantedBy=multi-user.target
