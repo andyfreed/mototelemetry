@@ -1,100 +1,117 @@
 #!/usr/bin/env python3
 """
-Update database schema for motorcycle telemetry system
+Update Database Schema for Motorcycle Telemetry
+Adds route tracking tables if they don't exist
 """
 
 import sqlite3
+import os
+import logging
 from pathlib import Path
 
-DATA_DIR = Path("/home/pi/motorcycle_data")
-DB_PATH = DATA_DIR / "telemetry.db"
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+# Database path
+DB_PATH = Path('/home/pi/motorcycle_data/telemetry.db')
 
 def update_schema():
-    """Update database schema to current version"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Check current schema
-    cursor.execute("PRAGMA table_info(telemetry_data)")
-    columns = [row[1] for row in cursor.fetchall()]
-    print(f"Current columns: {columns}")
-    
-    # Add missing columns if they don't exist
-    required_columns = [
-        ('vibration_level', 'REAL'),
-        ('power_voltage', 'REAL'), 
-        ('on_external_power', 'BOOLEAN'),
-        ('latitude', 'REAL'),
-        ('longitude', 'REAL'),
-        ('speed_mph', 'REAL'),
-        ('heading', 'REAL'),
-        ('gps_fix', 'BOOLEAN')
-    ]
-    
-    for column_name, column_type in required_columns:
-        if column_name not in columns:
-            try:
-                cursor.execute(f'ALTER TABLE telemetry_data ADD COLUMN {column_name} {column_type}')
-                print(f"Added column: {column_name}")
-            except sqlite3.OperationalError as e:
-                print(f"Column {column_name} already exists or error: {e}")
-    
-    # Remove old columns that might cause issues (altitude, speed)
-    # SQLite doesn't support DROP COLUMN, so we'll recreate the table if needed
-    cursor.execute("PRAGMA table_info(telemetry_data)")
-    current_schema = cursor.fetchall()
-    
-    # Check if we have old columns that need to be removed
-    old_columns = ['altitude', 'speed']
-    has_old_columns = any(col[1] in old_columns for col in current_schema)
-    
-    if has_old_columns:
-        print("Recreating table to remove old columns...")
+    """Add necessary tables for route tracking if they don't exist"""
+    if not DB_PATH.exists():
+        logging.error(f"Database not found at {DB_PATH}")
+        return False
         
-        # Create new table with correct schema
-        cursor.execute('''
-            CREATE TABLE telemetry_data_new (
+    try:
+        logging.info(f"Updating schema for database at {DB_PATH}")
+        
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+        
+        # Check if tracks table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tracks'")
+        tracks_exists = cursor.fetchone() is not None
+        
+        # Check if rides table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='rides'")
+        rides_exists = cursor.fetchone() is not None
+        
+        # Check if status table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='status'")
+        status_exists = cursor.fetchone() is not None
+        
+        # Create tracks table if it doesn't exist
+        if not tracks_exists:
+            logging.info("Creating tracks table")
+            cursor.execute('''
+            CREATE TABLE tracks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT,
-                timestamp TIMESTAMP,
-                ax REAL, ay REAL, az REAL,
-                gx REAL, gy REAL, gz REAL,
-                mx REAL, my REAL, mz REAL,
-                temperature REAL,
-                vibration_level REAL,
-                power_voltage REAL,
-                on_external_power BOOLEAN,
+                ride_id TEXT,
+                timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
                 latitude REAL,
                 longitude REAL,
-                speed_mph REAL,
-                heading REAL,
-                gps_fix BOOLEAN,
-                FOREIGN KEY (session_id) REFERENCES rides (session_id)
+                altitude REAL,
+                speed_mph REAL
             )
-        ''')
+            ''')
         
-        # Copy data from old table, mapping columns appropriately
-        cursor.execute('''
-            INSERT INTO telemetry_data_new 
-            (id, session_id, timestamp, ax, ay, az, gx, gy, gz, mx, my, mz, 
-             temperature, vibration_level, power_voltage, on_external_power, 
-             latitude, longitude, speed_mph, heading, gps_fix)
-            SELECT 
-                id, session_id, timestamp, ax, ay, az, gx, gy, gz, mx, my, mz,
-                temperature, vibration_level, power_voltage, on_external_power,
-                latitude, longitude, speed_mph, heading, gps_fix
-            FROM telemetry_data
-        ''')
+        # Create rides table if it doesn't exist
+        if not rides_exists:
+            logging.info("Creating rides table")
+            cursor.execute('''
+            CREATE TABLE rides (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ride_id TEXT UNIQUE,
+                start_time TEXT,
+                end_time TEXT,
+                name TEXT,
+                distance_miles REAL,
+                max_speed_mph REAL,
+                avg_speed_mph REAL,
+                active INTEGER DEFAULT 1
+            )
+            ''')
         
-        # Drop old table and rename new one
-        cursor.execute('DROP TABLE telemetry_data')
-        cursor.execute('ALTER TABLE telemetry_data_new RENAME TO telemetry_data')
+        # Create status table if it doesn't exist
+        if not status_exists:
+            logging.info("Creating status table")
+            cursor.execute('''
+            CREATE TABLE status (
+                id INTEGER PRIMARY KEY,
+                current_ride_id TEXT,
+                tracking_active INTEGER DEFAULT 0,
+                last_updated TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            ''')
+            
+            # Insert default status record
+            cursor.execute("INSERT INTO status (id, tracking_active) VALUES (1, 0)")
         
-        print("Table recreated with correct schema")
-    
-    conn.commit()
-    conn.close()
-    print("Database schema updated successfully!")
+        # Check if we need to add any columns to the telemetry_data table
+        cursor.execute("PRAGMA table_info(telemetry_data)")
+        columns = [col[1] for col in cursor.fetchall()]
+        
+        if 'altitude' not in columns:
+            logging.info("Adding altitude column to telemetry_data")
+            cursor.execute("ALTER TABLE telemetry_data ADD COLUMN altitude REAL")
+        
+        if 'satellites_used' not in columns:
+            logging.info("Adding satellites_used column to telemetry_data")
+            cursor.execute("ALTER TABLE telemetry_data ADD COLUMN satellites_used INTEGER")
+        
+        conn.commit()
+        conn.close()
+        
+        logging.info("Database schema update complete")
+        return True
+    except Exception as e:
+        logging.error(f"Error updating database schema: {e}")
+        return False
 
 if __name__ == "__main__":
-    update_schema() 
+    if update_schema():
+        print("✅ Database schema updated successfully")
+    else:
+        print("❌ Failed to update database schema") 
