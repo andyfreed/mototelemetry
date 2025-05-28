@@ -1,0 +1,14 @@
+[Unit]
+Description=GPS (Global Positioning System) Daemon
+Documentation=man:gpsd(8)
+Requires=gpsd.socket
+After=network-online.target
+
+[Service]
+Type=forking
+ExecStart=/usr/sbin/gpsd -n /dev/ttyACM0
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target 
