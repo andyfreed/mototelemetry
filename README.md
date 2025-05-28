@@ -247,6 +247,52 @@ For support, open an issue on GitHub or contact the maintainers.
 - [ ] Cloud data synchronization
 - [ ] Mobile app companion
 
+## GPS Troubleshooting
+
+If you're experiencing issues with GPS on your motorcycle telemetry system, there are several tools to help diagnose and fix common problems:
+
+### Quick GPS Fix
+
+Run the GPS fix script to automatically detect and fix common GPS issues:
+
+```bash
+sudo ./fix_gps.sh
+```
+
+This script will:
+1. Detect your GPS device and correct serial port
+2. Configure and restart the GPS daemon (gpsd)
+3. Restart the telemetry service
+4. Update Node-RED with the correct camera URL
+
+### Comprehensive GPS Debugging
+
+For a more detailed analysis of GPS issues, run the debugging script:
+
+```bash
+python3 debug_gps.py
+```
+
+This script performs a complete diagnostic of your GPS system:
+- Checks GPS hardware connection
+- Verifies the GPS daemon is running
+- Examines GPS data in the database
+- Tests direct GPS access
+- Provides suggestions for fixing any detected issues
+
+### Manual GPS Fix Steps
+
+If the automated scripts don't resolve your issue:
+
+1. Ensure the GPS device is properly connected (should appear as U-Blox device in `lsusb`)
+2. Verify the GPS is accessible at `/dev/ttyACM0` or similar
+3. Check the GPS daemon status: `systemctl status gpsd`
+4. If needed, manually start GPS: `sudo gpsd -n /dev/ttyACM0`
+5. Restart telemetry: `sudo systemctl restart motorcycle-telemetry`
+6. Check GPS data: `gpspipe -w`
+
+Remember that GPS typically requires a clear view of the sky and may take 2-5 minutes to acquire a satellite fix when starting from a cold state.
+
 ---
 
 **⚠️ Disclaimer**: This system is designed for data collection and analysis purposes. Always prioritize safety while riding. Do not interact with the dashboard while operating the motorcycle. 
