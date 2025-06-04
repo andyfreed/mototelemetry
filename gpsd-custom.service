@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/sbin/gpsd -N -n /dev/ttyACM0
+ExecStart=/usr/sbin/gpsd -N -G -n -b /dev/ttyUSB1
 Restart=always
 RestartSec=5
 

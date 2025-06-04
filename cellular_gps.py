@@ -58,24 +58,17 @@ class CellularGPS:
             'timestamp': datetime.now()
         }
         
-        # Look for GPS section
-        gps_section = False
+        # Extract all NMEA sentences from the output
         nmea_lines = []
+        lines = output.split('\n')
         
-        for line in output.split('\n'):
+        for line in lines:
             line = line.strip()
-            if 'GPS' in line and '|' in line:
-                gps_section = True
-                continue
-            elif '---' in line:
-                gps_section = False
-                continue
-            elif gps_section and 'nmea:' in line:
-                # Extract NMEA data
-                nmea_data = line.split('nmea:')[1].strip()
-                nmea_lines.append(nmea_data)
-            elif gps_section and line.startswith('$'):
-                nmea_lines.append(line)
+            # Find lines that contain NMEA data (starting with $)
+            if '$GP' in line or '$GN' in line or '$BD' in line or '$GL' in line:
+                # Extract NMEA sentence - it might be after the pipe or mixed in
+                nmea_matches = re.findall(r'\$[A-Z]{2}[A-Z,0-9\.\*\-]*', line)
+                nmea_lines.extend(nmea_matches)
                 
         # Parse NMEA sentences
         for nmea in nmea_lines:
@@ -105,31 +98,37 @@ class CellularGPS:
             lat_dir = parts[4]
             lon = parts[5]
             lon_dir = parts[6]
-            speed_knots = parts[7]
-            course = parts[8]
+            speed_knots = parts[7] if parts[7] else '0'
+            course = parts[8] if parts[8] else '0'
             
-            if lat and lon:
-                # Convert from NMEA format (DDMM.MMMM) to decimal degrees
-                lat_deg = float(lat[:2]) + float(lat[2:]) / 60
+            if lat and lon and lat_dir and lon_dir:
+                # Convert from NMEA format (DDMM.MMMMMM) to decimal degrees
+                lat_float = float(lat)
+                lat_deg = int(lat_float / 100)
+                lat_min = lat_float % 100
+                lat_decimal = lat_deg + lat_min / 60
                 if lat_dir == 'S':
-                    lat_deg = -lat_deg
+                    lat_decimal = -lat_decimal
                     
-                lon_deg = float(lon[:3]) + float(lon[3:]) / 60
+                lon_float = float(lon)
+                lon_deg = int(lon_float / 100)
+                lon_min = lon_float % 100
+                lon_decimal = lon_deg + lon_min / 60
                 if lon_dir == 'W':
-                    lon_deg = -lon_deg
+                    lon_decimal = -lon_decimal
                     
                 speed_mph = float(speed_knots) * 1.15078 if speed_knots else 0
                 heading = float(course) if course else None
                 
                 return {
-                    'latitude': lat_deg,
-                    'longitude': lon_deg,
+                    'latitude': lat_decimal,
+                    'longitude': lon_decimal,
                     'speed_mph': speed_mph,
                     'heading': heading,
                     'gps_fix': True
                 }
-        except (ValueError, IndexError):
-            pass
+        except (ValueError, IndexError) as e:
+            print(f"RMC parsing error: {e} for {nmea}")
             
         return None
         

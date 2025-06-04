@@ -147,6 +147,28 @@
             </div>
         </div>
 
+        <!-- Camera Feed Row -->
+        <div class="row">
+            <div class="col-12">
+                <div class="dashboard-card">
+                    <h5 class="mb-3">📹 Live Camera Feed</h5>
+                    <div class="text-center">
+                        <img id="cameraFeed" 
+                             src="http://10.202.236.255:8090/stream.mjpg" 
+                             alt="Camera feed not available"
+                             style="width: 100%; max-width: 800px; height: auto; border-radius: 10px; border: 2px solid rgba(255, 255, 255, 0.3);"
+                             onerror="this.src='http://localhost:8090/stream.mjpg'; this.onerror=null;">
+                        <div class="mt-3">
+                            <button onclick="takeSnapshot()" class="btn btn-success btn-lg">
+                                📸 Take Snapshot
+                            </button>
+                            <span id="snapshotStatus" class="ms-3 text-warning"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Map and System Status Row -->
         <div class="row">
             <!-- GPS Map -->
@@ -353,6 +375,36 @@
         // Update time
         function updateTime() {
             document.getElementById('currentTime').textContent = new Date().toLocaleTimeString();
+        }
+
+        // Take camera snapshot
+        function takeSnapshot() {
+            const statusEl = document.getElementById('snapshotStatus');
+            statusEl.textContent = '📸 Taking snapshot...';
+            statusEl.className = 'ms-3 text-warning';
+            
+            fetch('http://10.202.236.255:8090/snapshot')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        statusEl.textContent = '✅ Snapshot saved: ' + data.filename;
+                        statusEl.className = 'ms-3 text-success';
+                    } else {
+                        statusEl.textContent = '❌ Failed to save snapshot';
+                        statusEl.className = 'ms-3 text-danger';
+                    }
+                    setTimeout(() => {
+                        statusEl.textContent = '';
+                    }, 3000);
+                })
+                .catch(error => {
+                    console.error('Snapshot error:', error);
+                    statusEl.textContent = '❌ Snapshot error';
+                    statusEl.className = 'ms-3 text-danger';
+                    setTimeout(() => {
+                        statusEl.textContent = '';
+                    }, 3000);
+                });
         }
     </script>
 </body>

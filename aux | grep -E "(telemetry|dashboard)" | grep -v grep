@@ -1,0 +1,6 @@
+● motorcycle-telemetry.service - Motorcycle Telemetry System
+     Loaded: loaded (]8;;file://triumphpi/etc/systemd/system/motorcycle-telemetry.service/etc/systemd/system/motorcycle-telemetry.service]8;;; [0;1;32menabled[0m; preset: [0;1;32menabled[0m)
+     Active: activating (auto-restart) (Result: exit-code) since Mon 2025-05-26 21:13:01 EDT; 6s ago
+    Process: 1224 ExecStart=/home/pi/telemetry-env/bin/python /home/pi/motorcycle_telemetry.py [0;1;31m(code=exited, status=1/FAILURE)[0m
+   Main PID: 1224 (code=exited, status=1/FAILURE)
+        CPU: 539ms

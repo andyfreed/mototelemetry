@@ -151,7 +151,8 @@ def camera_capture_thread():
     # Initialize camera
     camera = None
     try:
-        camera = cv2.VideoCapture(0)  # Use first camera device
+        # Try USB camera first, then fallback to default
+        camera = cv2.VideoCapture(0)  # USB camera should be device 0
         camera.set(cv2.CAP_PROP_FRAME_WIDTH, RESOLUTION[0])
         camera.set(cv2.CAP_PROP_FRAME_HEIGHT, RESOLUTION[1])
         camera.set(cv2.CAP_PROP_FPS, FRAMERATE)
@@ -225,7 +226,7 @@ def main():
     
     # Start HTTP server
     try:
-        server = StreamingServer(('', PORT), StreamingHandler)
+        server = StreamingServer(('0.0.0.0', PORT), StreamingHandler)
         logging.info(f"📹 Camera stream available at http://localhost:{PORT}/")
         server.serve_forever()
     except Exception as e:

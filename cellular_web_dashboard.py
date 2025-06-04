@@ -116,6 +116,20 @@ DASHBOARD_HTML = '''
         </div>
         
         <div id="map"></div>
+        
+        <div class="card" style="margin-top: 20px;">
+            <div class="label">Live Camera Feed</div>
+            <img id="camera-feed" src="http://10.202.236.255:8090/stream.mjpg" 
+                 style="width: 100%; max-width: 640px; height: auto; border-radius: 10px; margin-top: 10px;"
+                 alt="Camera feed not available" 
+                 onerror="this.src='http://localhost:8090/stream.mjpg'" />
+            <div style="margin-top: 10px;">
+                <button onclick="takeSnapshot()" style="background: #4CAF50; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer;">
+                    📸 Take Snapshot
+                </button>
+                <span id="snapshot-status" style="margin-left: 10px; color: #888;"></span>
+            </div>
+        </div>
     </div>
     
     <script>
@@ -189,6 +203,27 @@ DASHBOARD_HTML = '''
                 .catch(error => {
                     document.getElementById('status').textContent = 'Disconnected';
                     document.getElementById('status').className = 'status disconnected';
+                });
+        }
+        
+        // Take snapshot function
+        function takeSnapshot() {
+            document.getElementById('snapshot-status').textContent = 'Taking snapshot...';
+            fetch('http://10.202.236.255:8090/snapshot')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('snapshot-status').textContent = 
+                        `Snapshot saved: ${data.filename}`;
+                    setTimeout(() => {
+                        document.getElementById('snapshot-status').textContent = '';
+                    }, 3000);
+                })
+                .catch(error => {
+                    document.getElementById('snapshot-status').textContent = 
+                        `Error: ${error}`;
+                    setTimeout(() => {
+                        document.getElementById('snapshot-status').textContent = '';
+                    }, 3000);
                 });
         }
         
