@@ -1,0 +1,12 @@
+[Unit]
+Description=GPS (Global Positioning System) Daemon - Custom
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/gpsd -N -n /dev/ttyACM0
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target 

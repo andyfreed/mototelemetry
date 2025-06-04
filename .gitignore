@@ -1,3 +1,64 @@
+# Motorcycle Telemetry System - Git Ignore
+
+# System and personal files
+.bash_history
+.python_history
+.lesshst
+.sudo_as_admin_successful
+.cache/
+.local/
+.ssh/
+.cursor-server/
+.npm/
+.config/
+.cursor/
+.node-red/
+~/
+
+# Database files and logs (keep structure, not data)
+motorcycle_data/telemetry.db
+motorcycle_data/snapshots/*.jpg
+motorcycle_data/snapshots/*.png
+*.log
+telemetry_output.log
+telemetry_test.log
+dashboard.log
+
+# Backup and temporary files
+*_backup.py
+latest_ride.csv
+motorcycle_test_ride.csv
+*~
+*.tmp
+*.swp
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+telemetry-env/
+venv/
+env/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Node modules (if any)
+node_modules/
+
+# Service logs
+journalctl.log
+
+# Temporary scripts
+"aux | grep -E \"(telemetry|dashboard)\" | grep -v grep"
+
 # Python
 __pycache__/
 *.py[cod]
