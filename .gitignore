@@ -139,4 +139,38 @@ aux
 
 # Keep example configurations
 !*_example.json
-!*_template.json 
+!*_template.json
+
+# System files
+.bash_logout
+.bashrc
+.profile
+.tmux.conf
+
+# Database files
+*.db-journal
+motorcycle_data/*.db*
+
+# Backup files
+*_backup.json
+*.backup
+
+# Temporary files
+temp_*
+
+# Node modules (if any remain)
+package-lock.json
+
+# Environment files
+.env
+*.env
+
+# IDE files
+*.swp
+*.swo
+
+# System service files (these are managed by systemd)
+*.service
+
+# GPS data snapshots
+motorcycle_data/snapshots/ 

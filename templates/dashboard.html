@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🏍️ Motorcycle Telemetry Dashboard</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Leaflet for GPS mapping -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Socket.IO for real-time updates -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    
+    <style>
+        body {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .dashboard-card {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-active { background-color: #28a745; }
+        .status-danger { background-color: #dc3545; }
+        .gps-active { 
+            background: linear-gradient(90deg, #28a745, #20c997);
+            border: 2px solid #28a745;
+        }
+        .gps-inactive { 
+            background: linear-gradient(90deg, #dc3545, #fd7e14);
+            border: 2px solid #dc3545;
+        }
+        #map { 
+            height: 400px; 
+            border-radius: 10px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+        }
+        .metric-value {
+            font-size: 2.5rem;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+        .connection-status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+    <!-- Connection Status -->
+    <div id="connectionStatus" class="connection-status bg-success text-white">
+        🔗 Connected
+    </div>
+
+    <!-- Header -->
+    <nav class="navbar navbar-dark mb-4">
+        <div class="container-fluid">
+            <span class="navbar-brand">🏍️ Motorcycle Telemetry Dashboard</span>
+            <span class="navbar-text">
+                <span id="currentTime"></span>
+            </span>
+        </div>
+    </nav>
+
+    <div class="container-fluid">
+        <!-- GPS Status Row -->
+        <div class="row">
+            <div class="col-12">
+                <div class="dashboard-card" id="gpsStatusCard">
+                    <div class="row align-items-center">
+                        <div class="col-md-8">
+                            <h4 id="gpsStatusTitle">🛰️ GPS Status</h4>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <p><strong>Status:</strong> <span id="gpsStatusText">Loading...</span></p>
+                                    <p><strong>Fix Type:</strong> <span id="gpsFixType">Unknown</span></p>
+                                    <p><strong>Speed:</strong> <span id="gpsSpeed">0</span> mph</p>
+                                </div>
+                                <div class="col-md-6">
+                                    <p><strong>Latitude:</strong> <span id="gpsLat">N/A</span></p>
+                                    <p><strong>Longitude:</strong> <span id="gpsLon">N/A</span></p>
+                                    <p><strong>Last Update:</strong> <span id="gpsLastUpdate">N/A</span></p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4 text-center">
+                            <div class="metric-value" id="dataAge">--</div>
+                            <div>Seconds Ago</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Gauges Row -->
+        <div class="row">
+            <!-- Lean Angle -->
+            <div class="col-lg-3 col-md-6">
+                <div class="dashboard-card text-center">
+                    <h5 class="mb-3">🏍️ Lean Angle</h5>
+                    <div class="metric-value" id="leanAngleValue">0°</div>
+                </div>
+            </div>
+
+            <!-- Forward G-Force -->
+            <div class="col-lg-3 col-md-6">
+                <div class="dashboard-card text-center">
+                    <h5 class="mb-3">⚡ Forward G</h5>
+                    <div class="metric-value" id="forwardGValue">0.0g</div>
+                </div>
+            </div>
+
+            <!-- Lateral G-Force -->
+            <div class="col-lg-3 col-md-6">
+                <div class="dashboard-card text-center">
+                    <h5 class="mb-3">🌀 Lateral G</h5>
+                    <div class="metric-value" id="lateralGValue">0.0g</div>
+                </div>
+            </div>
+
+            <!-- Speed -->
+            <div class="col-lg-3 col-md-6">
+                <div class="dashboard-card text-center">
+                    <h5 class="mb-3">🚀 Speed</h5>
+                    <div class="metric-value" id="speedValue">0 mph</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Map and System Status Row -->
+        <div class="row">
+            <!-- GPS Map -->
+            <div class="col-lg-8">
+                <div class="dashboard-card">
+                    <h5 class="mb-3">🗺️ GPS Location</h5>
+                    <div id="map"></div>
+                </div>
+            </div>
+
+            <!-- System Status -->
+            <div class="col-lg-4">
+                <div class="dashboard-card">
+                    <h5 class="mb-3">🛠️ System Status</h5>
+                    <div id="systemStatus">
+                        <p><strong>Data Rate:</strong> <span id="dataRate">0</span> Hz</p>
+                        <p><strong>Recent Records:</strong> <span id="recentRecords">0</span></p>
+                        <p><strong>Total Records:</strong> <span id="totalRecords">0</span></p>
+                        <p><strong>System Status:</strong> <span id="systemStatusText">Loading...</span></p>
+                    </div>
+                    
+                    <h6 class="mt-4 mb-3">🔧 Services</h6>
+                    <div id="serviceStatus">
+                        <!-- Services will be populated by JavaScript -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript -->
+    <script>
+        // Global variables
+        let socket;
+        let map;
+        let currentMarker;
+
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeSocket();
+            initializeMap();
+            updateTime();
+            setInterval(updateTime, 1000);
+            
+            // Initial data load
+            fetchTelemetryData();
+            setInterval(fetchTelemetryData, 3000);
+        });
+
+        // Socket.IO connection
+        function initializeSocket() {
+            socket = io();
+            
+            socket.on('connect', function() {
+                updateConnectionStatus(true);
+            });
+            
+            socket.on('disconnect', function() {
+                updateConnectionStatus(false);
+            });
+            
+            socket.on('telemetry_update', function(data) {
+                updateDashboard(data);
+            });
+        }
+
+        // Initialize map
+        function initializeMap() {
+            map = L.map('map').setView([42.3601, -71.0589], 13);
+            
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+        }
+
+        // Fetch telemetry data
+        function fetchTelemetryData() {
+            fetch('/api/telemetry')
+                .then(response => response.json())
+                .then(data => updateDashboard(data))
+                .catch(error => {
+                    console.error('Error fetching telemetry:', error);
+                    updateConnectionStatus(false);
+                });
+        }
+
+        // Update dashboard with new data
+        function updateDashboard(data) {
+            const telemetry = data.telemetry;
+            const gpsStatus = data.gps_status;
+            const systemStatus = data.system_status;
+            const services = data.services;
+
+            // Update gauge values
+            if (telemetry) {
+                document.getElementById('leanAngleValue').textContent = telemetry.lean_angle + '°';
+                document.getElementById('forwardGValue').textContent = telemetry.forward_g.toFixed(2) + 'g';
+                document.getElementById('lateralGValue').textContent = telemetry.lateral_g.toFixed(2) + 'g';
+                document.getElementById('speedValue').textContent = telemetry.speed + ' mph';
+                document.getElementById('dataAge').textContent = telemetry.data_age;
+            }
+
+            // Update GPS status
+            if (gpsStatus) {
+                const statusCard = document.getElementById('gpsStatusCard');
+                const statusTitle = document.getElementById('gpsStatusTitle');
+                
+                if (gpsStatus.has_gps) {
+                    statusCard.className = 'dashboard-card gps-active';
+                    statusTitle.textContent = '🛰️ GPS ACTIVE';
+                } else {
+                    statusCard.className = 'dashboard-card gps-inactive';
+                    statusTitle.textContent = '❌ GPS NOT AVAILABLE';
+                }
+
+                document.getElementById('gpsStatusText').textContent = gpsStatus.status_text;
+                document.getElementById('gpsFixType').textContent = gpsStatus.has_gps_fix ? '3D Fix' : 'No Fix';
+                document.getElementById('gpsSpeed').textContent = telemetry ? telemetry.speed : '0';
+                document.getElementById('gpsLat').textContent = gpsStatus.has_valid_coords ? 
+                    telemetry.latitude.toFixed(6) : 'N/A';
+                document.getElementById('gpsLon').textContent = gpsStatus.has_valid_coords ? 
+                    telemetry.longitude.toFixed(6) : 'N/A';
+                document.getElementById('gpsLastUpdate').textContent = gpsStatus.last_update;
+
+                // Update map
+                if (gpsStatus.has_gps && telemetry) {
+                    updateMap(telemetry.latitude, telemetry.longitude, telemetry.speed);
+                }
+            }
+
+            // Update system status
+            if (systemStatus) {
+                document.getElementById('dataRate').textContent = systemStatus.data_rate;
+                document.getElementById('recentRecords').textContent = systemStatus.recent_records;
+                document.getElementById('totalRecords').textContent = systemStatus.total_records;
+                document.getElementById('systemStatusText').innerHTML = 
+                    '<span class="status-indicator ' + getStatusClass(systemStatus.status) + '"></span>' + systemStatus.status;
+            }
+
+            // Update service status
+            if (services) {
+                updateServiceStatus(services);
+            }
+        }
+
+        // Update map location
+        function updateMap(lat, lon, speed) {
+            const position = [lat, lon];
+            
+            if (currentMarker) {
+                map.removeLayer(currentMarker);
+            }
+            
+            currentMarker = L.marker(position)
+                .addTo(map)
+                .bindPopup('🏍️ Current Location<br>Speed: ' + speed + ' mph<br>Coordinates: ' + lat.toFixed(6) + ', ' + lon.toFixed(6));
+            
+            map.setView(position, 15);
+        }
+
+        // Update service status
+        function updateServiceStatus(services) {
+            const serviceContainer = document.getElementById('serviceStatus');
+            const serviceNames = {
+                'motorcycle-telemetry': '🏍️ Telemetry',
+                'gpsd': '🛰️ GPS Daemon',
+                'gps-proxy': '📡 GPS Proxy',
+                'route-tracker': '🗺️ Route Tracker',
+                'tailscaled': '🔒 Tailscale'
+            };
+            
+            serviceContainer.innerHTML = '';
+            
+            Object.entries(services).forEach(function([service, active]) {
+                const serviceDiv = document.createElement('div');
+                serviceDiv.className = 'mb-2';
+                serviceDiv.innerHTML = 
+                    '<span class="status-indicator ' + (active ? 'status-active' : 'status-danger') + '"></span>' +
+                    (serviceNames[service] || service) + ': ' + (active ? 'Active' : 'Inactive');
+                serviceContainer.appendChild(serviceDiv);
+            });
+        }
+
+        // Get status class
+        function getStatusClass(status) {
+            switch (status.toLowerCase()) {
+                case 'active': return 'status-active';
+                default: return 'status-danger';
+            }
+        }
+
+        // Update connection status
+        function updateConnectionStatus(connected) {
+            const statusEl = document.getElementById('connectionStatus');
+            if (connected) {
+                statusEl.className = 'connection-status bg-success text-white';
+                statusEl.textContent = '🔗 Connected';
+            } else {
+                statusEl.className = 'connection-status bg-danger text-white';
+                statusEl.textContent = '❌ Disconnected';
+            }
+        }
+
+        // Update time
+        function updateTime() {
+            document.getElementById('currentTime').textContent = new Date().toLocaleTimeString();
+        }
+    </script>
+</body>
+</html> 
