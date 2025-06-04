@@ -1,0 +1,17 @@
+[Unit]
+Description=GPS (Global Positioning System) Daemon - Cellular Module
+After=network.target ModemManager.service
+Wants=ModemManager.service
+
+[Service]
+Type=forking
+Environment=OPTIONS="-n /dev/ttyUSB1"
+Environment=USBAUTO="true"
+ExecStartPre=/bin/bash -c 'sudo mmcli -m 0 -e && sudo mmcli -m 0 --location-enable-gps-nmea || true'
+ExecStart=/usr/sbin/gpsd $OPTIONS
+PIDFile=/run/gpsd.pid
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target 

@@ -1,7 +1,9 @@
 #!/bin/bash
+# Motorcycle Telemetry System - Startup Verification
+# Checks all services and their auto-start configuration
 
-echo "🏍️ Motorcycle Telemetry System - Service Status Check"
-echo "=================================================="
+echo "🏍️ Motorcycle Telemetry System - Startup Check"
+echo "=============================================="
 date
 echo ""
 
@@ -165,4 +167,4 @@ echo "Service Restart:    sudo systemctl restart <service-name>"
 echo "View Logs:          journalctl -u <service-name> -f"
 
 echo ""
-echo "✅ Status check complete!"
+echo "✅ Status check complete!" 

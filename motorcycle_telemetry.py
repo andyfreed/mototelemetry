@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Enhanced Motorcycle Telemetry System with Continuous GPS
-Records IMU and GPS data during rides with improved GPS performance
+Enhanced Motorcycle Telemetry System with Cellular GPS
+Records IMU and GPS data during rides using SIM7600G-H cellular module GPS
 """
 
 import qwiic_icm20948
-from gps3 import gps3
+# from gps3 import gps3  # Replaced with cellular GPS
 import json
 import time
 import threading
@@ -20,6 +20,9 @@ import logging
 from pathlib import Path
 from collections import deque
 
+# Import our cellular GPS interface
+from cellular_gps import CellularGPS
+
 # Configuration
 DATA_DIR = Path("/home/pi/motorcycle_data")
 DB_PATH = DATA_DIR / "telemetry.db"
@@ -28,7 +31,7 @@ HOME_WIFI_SSID = "Ncwf1"
 UPLOAD_URL = "http://your-server.com/api/telemetry"
 
 # Engine detection parameters
-SAMPLE_RATE = 10           # Hz - samples per second
+SAMPLE_RATE = 5            # Hz - REDUCED from 10 to save CPU
 GPS_UPDATE_RATE = 1        # Hz - GPS updates per second
 
 # Power monitoring
@@ -43,8 +46,9 @@ class MotorcycleTelemetry:
         
         # Initialize sensors
         self.imu = None
-        self.gps_socket = None
-        self.data_stream = None
+        # self.gps_socket = None  # Replaced with cellular GPS
+        # self.data_stream = None
+        self.cellular_gps = CellularGPS()
         
         # State tracking
         self.engine_running = False
@@ -172,74 +176,53 @@ class MotorcycleTelemetry:
             self.logger.error(f"IMU initialization error: {e}")
             return False
             
-        # Initialize GPS with continuous reading thread
+        # Initialize Cellular GPS
         try:
-            self.gps_socket = gps3.GPSDSocket()
-            self.gps_socket.connect()
-            self.gps_socket.watch()
-            self.data_stream = gps3.DataStream()
-            
-            # Start GPS reading thread
-            self.gps_thread = threading.Thread(target=self.gps_reader_thread, daemon=True)
-            self.gps_thread.start()
-            
-            self.logger.info("✅ GPS initialized with continuous reading")
+            if self.cellular_gps.enable_gps():
+                # Start GPS reading thread
+                self.gps_thread = threading.Thread(target=self.cellular_gps_reader_thread, daemon=True)
+                self.gps_thread.start()
+                self.logger.info("✅ Cellular GPS initialized successfully")
+            else:
+                self.logger.error("Failed to enable cellular GPS")
+                return False
         except Exception as e:
-            self.logger.error(f"GPS initialization error: {e}")
-            self.gps_socket = None
-            self.data_stream = None
+            self.logger.error(f"Cellular GPS initialization error: {e}")
+            return False
             
         return True
     
-    def gps_reader_thread(self):
-        """Continuous GPS reading thread for better performance"""
-        self.logger.info("🛰️ GPS reader thread started")
+    def cellular_gps_reader_thread(self):
+        """Cellular GPS reading thread - OPTIMIZED for lower CPU usage"""
+        self.logger.info("🛰️ Cellular GPS reader thread started")
         
         while self.running:
             try:
-                new_data = self.gps_socket.next(timeout=0.5)
-                if new_data:
-                    self.data_stream.unpack(new_data)
-                    
-                    # Process TPV (Time-Position-Velocity) data
-                    if hasattr(self.data_stream, 'TPV'):
-                        tpv = self.data_stream.TPV
-                        if isinstance(tpv, dict) and 'lat' in tpv and 'lon' in tpv:
-                            if tpv['lat'] != 'n/a' and tpv['lon'] != 'n/a':
-                                # Valid GPS data
-                                gps_data = {
-                                    'latitude': float(tpv['lat']),
-                                    'longitude': float(tpv['lon']),
-                                    'speed_mph': float(tpv.get('speed', 0)) * 2.237 if tpv.get('speed', 'n/a') != 'n/a' else 0,
-                                    'heading': float(tpv.get('track', 0)) if tpv.get('track', 'n/a') != 'n/a' else None,
-                                    'gps_fix': tpv.get('mode', 0) >= 2,
-                                    'hdop': float(tpv.get('hdop', 99)) if tpv.get('hdop', 'n/a') != 'n/a' else 99,
-                                    'timestamp': datetime.now(timezone.utc)
-                                }
-                                
-                                # Update latest GPS data with thread safety
-                                with self.gps_lock:
-                                    self.latest_gps_data = gps_data
-                                    self.gps_history.append(gps_data)
-                                    self.gps_stats['successful_reads'] += 1
-                                    self.gps_stats['last_fix_time'] = datetime.now(timezone.utc)
-                    
-                    # Process SKY data for satellite info
-                    if hasattr(self.data_stream, 'SKY'):
-                        sky = self.data_stream.SKY
-                        if isinstance(sky, dict) and 'uSat' in sky:
-                            with self.gps_lock:
-                                self.gps_stats['satellites_used'] = int(sky.get('uSat', 0))
-                    
+                # Get GPS data from cellular module
+                gps_data = self.cellular_gps.get_location()
+                
+                if gps_data:
                     with self.gps_lock:
+                        # Update latest GPS data
+                        self.latest_gps_data = gps_data
+                        self.gps_history.append(gps_data)
                         self.gps_stats['total_reads'] += 1
+                        
+                        if gps_data['gps_fix']:
+                            self.gps_stats['successful_reads'] += 1
+                            self.gps_stats['last_fix_time'] = datetime.now(timezone.utc)
+                        
+                        self.gps_stats['satellites_used'] = gps_data['satellites_used']
+                
+                # REDUCED frequency: Sleep for 2 seconds instead of 0.5 to reduce CPU load
+                time.sleep(2)
                         
             except Exception as e:
                 if self.running:  # Only log if we're still supposed to be running
-                    self.logger.warning(f"GPS reader thread error: {e}")
-                time.sleep(0.1)
+                    self.logger.warning(f"Cellular GPS reader thread error: {e}")
+                time.sleep(5)  # Longer sleep on error
         
-        self.logger.info("🛑 GPS reader thread stopped")
+        self.logger.info("🛑 Cellular GPS reader thread stopped")
         
     def get_current_wifi_ssid(self):
         """Get currently connected WiFi SSID"""

@@ -1,97 +1,139 @@
 #!/bin/bash
-# Final boot persistence setup for motorcycle telemetry
+# Final Boot Setup Script for Motorcycle Telemetry System
+# Ensures all services and GPS are properly configured on boot
 
-echo "🔧 Final boot persistence setup..."
+echo "🏍️ Configuring Motorcycle Telemetry System for Auto-Start"
+echo "=========================================================="
 
-# 1. Fix gpsd to start without socket dependency
-sudo tee /etc/systemd/system/gpsd.service > /dev/null << 'EOF'
+# Essential services that must auto-start
+CRITICAL_SERVICES=(
+    "motorcycle-telemetry.service"
+    "nodered.service" 
+    "camera-stream.service"
+    "tailscaled.service"
+    "ModemManager.service"
+)
+
+# Enable all critical services
+echo "🚀 Enabling critical services for auto-start..."
+for service in "${CRITICAL_SERVICES[@]}"; do
+    echo "   Enabling $service..."
+    sudo systemctl enable $service
+    if systemctl is-enabled --quiet $service; then
+        echo "   ✅ $service enabled"
+    else
+        echo "   ❌ Failed to enable $service"
+    fi
+done
+
+echo ""
+echo "🛰️ Setting up GPS auto-configuration..."
+
+# Create a GPS initialization service that runs after ModemManager
+cat << 'EOF' | sudo tee /etc/systemd/system/cellular-gps-init.service > /dev/null
 [Unit]
-Description=GPS (Global Positioning System) Daemon
-After=network.target
+Description=Initialize Cellular GPS
+After=ModemManager.service
+Requires=ModemManager.service
+StartLimitBurst=3
+StartLimitIntervalSec=60
 
 [Service]
-Type=forking
-ExecStart=/usr/sbin/gpsd -P /var/run/gpsd.pid -N -n /dev/ttyACM1
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/sleep 10
+ExecStart=/bin/bash -c 'mmcli -m 0 -e && mmcli -m 0 --location-enable-gps-nmea'
+User=root
 Restart=on-failure
-RestartSec=5
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# 2. Create a startup script that runs after boot
-sudo tee /etc/rc.local > /dev/null << 'EOF'
-#!/bin/bash
-# Motorcycle telemetry startup script
+sudo systemctl daemon-reload
+sudo systemctl enable cellular-gps-init.service
+echo "   ✅ GPS auto-initialization configured"
 
-# Wait for system to settle
-sleep 20
-
-# Log startup
-echo "$(date) - Starting motorcycle telemetry services" >> /home/pi/motorcycle_data/boot.log
-
-# Kill any existing gpsd processes
-killall gpsd 2>/dev/null
-
-# Start gpsd manually with the GPS device
-/usr/sbin/gpsd -N -n /dev/ttyACM1 &
-
-# Give gpsd time to start
-sleep 5
-
-# Ensure Node-RED is running
-systemctl is-active --quiet nodered || systemctl start nodered
-
-# Ensure telemetry is running
-systemctl is-active --quiet motorcycle-telemetry || systemctl start motorcycle-telemetry
-
-echo "$(date) - All services started" >> /home/pi/motorcycle_data/boot.log
-
-exit 0
-EOF
-
-sudo chmod +x /etc/rc.local
-
-# 3. Enable rc-local service
-sudo systemctl enable rc-local
-
-# 4. Create a simple monitoring script
-sudo tee /home/pi/check_services.sh > /dev/null << 'EOF'
-#!/bin/bash
-echo "🏍️ Motorcycle Telemetry Status"
-echo "=============================="
 echo ""
-echo "📡 GPS Process:"
-pgrep -a gpsd || echo "Not running"
-echo ""
-echo "🌐 Services:"
-for service in motorcycle-telemetry nodered; do
-    if systemctl is-active --quiet $service; then
-        echo "✅ $service: Running"
+echo "🔧 Verifying service status..."
+
+# Check that all services are enabled
+for service in "${CRITICAL_SERVICES[@]}"; do
+    if systemctl is-enabled --quiet $service; then
+        echo "   ✅ $service: Auto-start enabled"
     else
-        echo "❌ $service: Not running"
+        echo "   ⚠️  $service: Auto-start DISABLED"
     fi
 done
-echo ""
-echo "📍 GPS Data:"
-timeout 3 gpspipe -w -n 1 2>/dev/null | grep -o '"lat":[^,]*' | head -1 || echo "No GPS data"
-echo ""
-echo "🌐 Dashboard: http://$(hostname -I | awk '{print $1}'):1880/ui"
-EOF
 
-chmod +x /home/pi/check_services.sh
-
-# 5. Reload systemd
-sudo systemctl daemon-reload
+# Check GPS init service
+if systemctl is-enabled --quiet cellular-gps-init.service; then
+    echo "   ✅ cellular-gps-init.service: Auto-start enabled"
+else
+    echo "   ⚠️  cellular-gps-init.service: Auto-start DISABLED"
+fi
 
 echo ""
-echo "✅ Final boot persistence setup complete!"
+echo "📱 Testing cellular module..."
+if sudo mmcli -L | grep -q "SIMCOM_SIM7600G-H"; then
+    echo "   ✅ Cellular module detected"
+    
+    # Check modem status
+    if sudo mmcli -m 0 --simple-status | grep -q "state.*connected"; then
+        echo "   ✅ Cellular connection active"
+    else
+        echo "   ⚠️  Cellular connection inactive"
+    fi
+    
+    # Check GPS status
+    if sudo mmcli -m 0 --location-status | grep -q "gps-nmea"; then
+        echo "   ✅ GPS enabled"
+    else
+        echo "   ⚠️  GPS disabled"
+    fi
+else
+    echo "   ❌ Cellular module not detected"
+fi
+
 echo ""
-echo "📋 What will happen on reboot:"
-echo "   1. System will wait 20 seconds for USB devices"
-echo "   2. gpsd will start with your GPS on /dev/ttyACM1"
-echo "   3. Node-RED will start"
-echo "   4. Motorcycle telemetry will start with enhanced GPS"
+echo "🌐 Network interface check..."
+# Check network interfaces
+interfaces=("wlan0" "wwan0" "tailscale0")
+for iface in "${interfaces[@]}"; do
+    if ip link show $iface >/dev/null 2>&1; then
+        echo "   ✅ $iface interface present"
+    else
+        echo "   ⚠️  $iface interface not found"
+    fi
+done
+
 echo ""
-echo "🔍 To check status after reboot: ./check_services.sh"
-echo "📄 Boot log will be at: ~/motorcycle_data/boot.log" 
+echo "📋 Creating startup verification alias..."
+# Add alias to .bashrc for easy status checking
+if ! grep -q "alias status=" ~/.bashrc; then
+    echo "alias status='./startup_check.sh'" >> ~/.bashrc
+    echo "   ✅ Added 'status' command alias"
+else
+    echo "   ✅ Status alias already exists"
+fi
+
+echo ""
+echo "🏁 CONFIGURATION COMPLETE!"
+echo "=========================="
+echo ""
+echo "✅ All critical services enabled for auto-start"
+echo "✅ GPS auto-initialization configured"
+echo "✅ Network interfaces verified"
+echo "✅ Quick status command configured"
+echo ""
+echo "🔄 TESTING BOOT READINESS:"
+echo "========================="
+echo "To test auto-start functionality:"
+echo "   sudo reboot"
+echo ""
+echo "After reboot, check status with:"
+echo "   ./startup_check.sh"
+echo "   (or just type: status)"
+echo ""
+echo "🎯 Your motorcycle telemetry system is now fully configured for automatic startup!" 
