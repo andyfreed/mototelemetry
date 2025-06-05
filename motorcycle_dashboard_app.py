@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 import subprocess
 import os
 import requests
+import shutil
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'motorcycle_dashboard_2025'
@@ -116,12 +117,32 @@ class TelemetryData:
             cursor.execute('SELECT COUNT(*) FROM telemetry_data')
             total_count = cursor.fetchone()[0]
             
+            # Get storage information
+            total, used, free = shutil.disk_usage('/')
+            storage_used_gb = used / (1024**3)
+            storage_free_gb = free / (1024**3)
+            storage_total_gb = total / (1024**3)
+            storage_percent = (used / total) * 100
+            
+            # Get database size
+            db_size_mb = 0
+            try:
+                db_stat = os.stat(DATABASE_PATH)
+                db_size_mb = db_stat.st_size / (1024**2)
+            except:
+                pass
+
             self.system_status = {
                 'recent_records': recent_count,
                 'total_records': total_count,
                 'data_rate': round(recent_count / 5, 1) if recent_count > 0 else 0,
                 'status': 'Active' if data_age < 10 else ('Delayed' if data_age < 30 else 'Stalled'),
-                'last_update': self.latest_data.get('timestamp', 'Unknown')
+                'last_update': self.latest_data.get('timestamp', 'Unknown'),
+                'storage_used_gb': round(storage_used_gb, 1),
+                'storage_free_gb': round(storage_free_gb, 1),
+                'storage_total_gb': round(storage_total_gb, 1),
+                'storage_percent': round(storage_percent, 1),
+                'database_size_mb': round(db_size_mb, 1)
             }
             
             conn.close()

@@ -200,7 +200,17 @@
                         <p><strong>Data Rate:</strong> <span id="dataRate">0</span> Hz</p>
                         <p><strong>Recent Records:</strong> <span id="recentRecords">0</span></p>
                         <p><strong>Total Records:</strong> <span id="totalRecords">0</span></p>
+                        <p><strong>Database Size:</strong> <span id="databaseSize">0</span> MB</p>
                         <p><strong>System Status:</strong> <span id="systemStatusText">Loading...</span></p>
+                    </div>
+                    
+                    <h6 class="mt-4 mb-3">💾 Storage</h6>
+                    <div id="storageStatus">
+                        <p><strong>SD Card Used:</strong> <span id="storageUsed">0</span> GB / <span id="storageTotal">0</span> GB</p>
+                        <p><strong>Free Space:</strong> <span id="storageFree">0</span> GB (<span id="storagePercent">0</span>% used)</p>
+                        <div class="progress mt-2" style="height: 10px;">
+                            <div class="progress-bar" id="storageProgressBar" role="progressbar" style="width: 0%"></div>
+                        </div>
                     </div>
                     
                     <h6 class="mt-4 mb-3">🔧 Services</h6>
@@ -320,8 +330,28 @@
                 document.getElementById('dataRate').textContent = systemStatus.data_rate;
                 document.getElementById('recentRecords').textContent = systemStatus.recent_records;
                 document.getElementById('totalRecords').textContent = systemStatus.total_records;
+                document.getElementById('databaseSize').textContent = systemStatus.database_size_mb;
                 document.getElementById('systemStatusText').innerHTML = 
                     '<span class="status-indicator ' + getStatusClass(systemStatus.status) + '"></span>' + systemStatus.status;
+                
+                // Update storage information
+                document.getElementById('storageUsed').textContent = systemStatus.storage_used_gb;
+                document.getElementById('storageTotal').textContent = systemStatus.storage_total_gb;
+                document.getElementById('storageFree').textContent = systemStatus.storage_free_gb;
+                document.getElementById('storagePercent').textContent = systemStatus.storage_percent;
+                
+                // Update storage progress bar
+                const progressBar = document.getElementById('storageProgressBar');
+                progressBar.style.width = systemStatus.storage_percent + '%';
+                
+                // Color code the progress bar based on usage
+                if (systemStatus.storage_percent > 90) {
+                    progressBar.className = 'progress-bar bg-danger';
+                } else if (systemStatus.storage_percent > 75) {
+                    progressBar.className = 'progress-bar bg-warning';
+                } else {
+                    progressBar.className = 'progress-bar bg-success';
+                }
             }
 
             // Update service status
