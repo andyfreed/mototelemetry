@@ -151,15 +151,28 @@
         <div class="row">
             <div class="col-12">
                 <div class="dashboard-card">
-                    <h5 class="mb-3">📹 Live Camera Feed</h5>
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h5 class="mb-0">📹 Live Camera Feed</h5>
+                        <button id="cameraToggle" onclick="toggleCamera()" class="btn btn-outline-light btn-sm">
+                            🔴 Turn Off
+                        </button>
+                    </div>
                     <div class="text-center">
-                        <img id="cameraFeed" 
-                             src="http://10.202.236.255:8090/stream.mjpg" 
-                             alt="Camera feed not available"
-                             style="width: 100%; max-width: 800px; height: auto; border-radius: 10px; border: 2px solid rgba(255, 255, 255, 0.3);"
-                             onerror="this.src='http://localhost:8090/stream.mjpg'; this.onerror=null;">
+                        <div id="cameraContainer">
+                            <img id="cameraFeed" 
+                                 src="/camera/stream.mjpg" 
+                                 alt="Camera feed not available"
+                                 style="width: 100%; max-width: 800px; height: auto; border-radius: 10px; border: 2px solid rgba(255, 255, 255, 0.3);"
+                                 onerror="this.src='http://localhost:8090/stream.mjpg'; this.onerror=null;">
+                        </div>
+                        <div id="cameraOffMessage" class="d-none">
+                            <div class="bg-dark text-light p-4 rounded" style="max-width: 800px; margin: 0 auto; border: 2px solid rgba(255, 255, 255, 0.3);">
+                                <h3>📴 Camera Feed Disabled</h3>
+                                <p class="mb-0">Click "Turn On" to enable the camera feed</p>
+                            </div>
+                        </div>
                         <div class="mt-3">
-                            <button onclick="takeSnapshot()" class="btn btn-success btn-lg">
+                            <button onclick="takeSnapshot()" class="btn btn-success btn-lg" id="snapshotBtn">
                                 📸 Take Snapshot
                             </button>
                             <span id="snapshotStatus" class="ms-3 text-warning"></span>
@@ -212,6 +225,9 @@
             initializeMap();
             updateTime();
             setInterval(updateTime, 1000);
+            
+            // Initialize camera state (default to on)
+            initializeCameraState();
             
             // Initial data load
             fetchTelemetryData();
@@ -377,13 +393,72 @@
             document.getElementById('currentTime').textContent = new Date().toLocaleTimeString();
         }
 
+        // Camera toggle functionality
+        let cameraEnabled = true;
+
+        function initializeCameraState() {
+            // Check if user previously disabled camera
+            const savedState = localStorage.getItem('cameraEnabled');
+            if (savedState === 'false') {
+                // Camera was previously disabled, turn it off
+                toggleCamera();
+            }
+            // Otherwise camera starts enabled by default
+        }
+
+        function toggleCamera() {
+            const toggleBtn = document.getElementById('cameraToggle');
+            const cameraContainer = document.getElementById('cameraContainer');
+            const cameraOffMessage = document.getElementById('cameraOffMessage');
+            const snapshotBtn = document.getElementById('snapshotBtn');
+            const cameraFeed = document.getElementById('cameraFeed');
+
+            if (cameraEnabled) {
+                // Turn off camera
+                cameraContainer.classList.add('d-none');
+                cameraOffMessage.classList.remove('d-none');
+                toggleBtn.innerHTML = '🟢 Turn On';
+                toggleBtn.className = 'btn btn-outline-success btn-sm';
+                snapshotBtn.disabled = true;
+                snapshotBtn.classList.add('disabled');
+                
+                // Stop the camera stream by removing the src
+                cameraFeed.src = '';
+                cameraEnabled = false;
+                localStorage.setItem('cameraEnabled', 'false');
+            } else {
+                // Turn on camera
+                cameraContainer.classList.remove('d-none');
+                cameraOffMessage.classList.add('d-none');
+                toggleBtn.innerHTML = '🔴 Turn Off';
+                toggleBtn.className = 'btn btn-outline-light btn-sm';
+                snapshotBtn.disabled = false;
+                snapshotBtn.classList.remove('disabled');
+                
+                // Restart the camera stream
+                cameraFeed.src = '/camera/stream.mjpg';
+                cameraEnabled = true;
+                localStorage.setItem('cameraEnabled', 'true');
+            }
+        }
+
         // Take camera snapshot
         function takeSnapshot() {
+            if (!cameraEnabled) {
+                const statusEl = document.getElementById('snapshotStatus');
+                statusEl.textContent = '❌ Camera is disabled';
+                statusEl.className = 'ms-3 text-danger';
+                setTimeout(() => {
+                    statusEl.textContent = '';
+                }, 3000);
+                return;
+            }
+
             const statusEl = document.getElementById('snapshotStatus');
             statusEl.textContent = '📸 Taking snapshot...';
             statusEl.className = 'ms-3 text-warning';
             
-            fetch('http://10.202.236.255:8090/snapshot')
+            fetch('/camera/snapshot')
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {

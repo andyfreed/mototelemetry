@@ -4,7 +4,7 @@ Motorcycle Dashboard Web Application
 Replaces Node-RED with a clean, remote-accessible dashboard
 """
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, Response
 from flask_socketio import SocketIO, emit
 import sqlite3
 import json
@@ -14,6 +14,7 @@ import time
 from datetime import datetime, timedelta
 import subprocess
 import os
+import requests
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'motorcycle_dashboard_2025'
@@ -203,6 +204,34 @@ def api_gps_history():
         
     except Exception as e:
         return jsonify({'error': str(e)})
+
+@app.route('/camera/stream.mjpg')
+def camera_stream():
+    """Proxy camera stream from camera service"""
+    try:
+        def generate():
+            response = requests.get('http://localhost:8090/stream.mjpg', stream=True)
+            for chunk in response.iter_content(chunk_size=1024):
+                if chunk:
+                    yield chunk
+        
+        return Response(generate(), 
+                       mimetype='multipart/x-mixed-replace; boundary=FRAME')
+    except Exception as e:
+        print(f"Camera stream error: {e}")
+        return Response("Camera not available", status=503)
+
+@app.route('/camera/snapshot')
+def camera_snapshot():
+    """Proxy camera snapshot from camera service"""
+    try:
+        response = requests.get('http://localhost:8090/snapshot')
+        return Response(response.content, 
+                       status=response.status_code,
+                       headers={'Content-Type': 'application/json'})
+    except Exception as e:
+        print(f"Camera snapshot error: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
 @socketio.on('connect')
 def handle_connect():
